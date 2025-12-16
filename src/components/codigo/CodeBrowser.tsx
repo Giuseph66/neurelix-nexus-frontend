@@ -1,9 +1,9 @@
 import { useState, useMemo, useCallback, useEffect } from 'react';
-import { useParams, useSearchParams, useNavigate } from 'react-router-dom';
+import { useParams, useSearchParams, useNavigate, useLocation } from 'react-router-dom';
 import { Button } from '@/components/ui/button';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { File, Folder, ChevronRight, ChevronDown, Download, History, Loader2 } from 'lucide-react';
+import { File, Folder, ChevronRight, ChevronDown, Download, History, Loader2, GitPullRequest } from 'lucide-react';
 import { useRepoTree, useRepoBlob, useBranches } from '@/hooks/useRepos';
 import type { TreeEntry } from '@/types/codigo';
 
@@ -14,10 +14,15 @@ interface FileTreeItem extends TreeEntry {
 
 export function CodeBrowser() {
   const { repoId } = useParams<{ repoId: string }>();
+  const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
   const ref = searchParams.get('ref') || 'main';
   const selectedPath = searchParams.get('path') || '';
   const navigate = useNavigate();
+  
+  // Extrair projectId da URL
+  const projectIdMatch = location.pathname.match(/\/project\/([^/]+)/);
+  const projectId = projectIdMatch ? projectIdMatch[1] : undefined;
 
   const { data: branchesData } = useBranches(repoId);
   const { data: rootTreeData, isLoading: treeLoading } = useRepoTree(repoId, ref, '');
@@ -256,6 +261,16 @@ export function CodeBrowser() {
               ))}
             </SelectContent>
           </Select>
+          {projectId && repoId && (
+            <Button 
+              variant="outline" 
+              size="sm" 
+              onClick={() => navigate(`/project/${projectId}/code/repos/${repoId}/pull-requests`)}
+            >
+              <GitPullRequest className="h-4 w-4 mr-2" />
+              Pull Requests
+            </Button>
+          )}
           {isFile && (
             <>
               <Button variant="outline" size="sm" onClick={() => {/* TODO: Ver histórico */}}>

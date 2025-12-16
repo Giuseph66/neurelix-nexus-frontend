@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Routes, Route, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
-import { useQueryClient } from '@tanstack/react-query';
+import { useQueryClient, useQuery } from '@tanstack/react-query';
+import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
@@ -9,8 +10,11 @@ import { ConnectGitWizard } from '@/components/codigo/ConnectGitWizard';
 import { RepoCatalog } from '@/components/codigo/RepoCatalog';
 import { CodeBrowser } from '@/components/codigo/CodeBrowser';
 import { SelectReposPage } from '@/components/codigo/SelectReposPage';
+import { PRList } from '@/components/codigo/PRList';
+import { PRDetail } from '@/components/codigo/PRDetail';
 import { useGitHubConnection } from '@/hooks/useGitHubOAuth';
 import { useSelectedRepos } from '@/hooks/useSelectRepos';
+import { usePageTitle } from '@/hooks/usePageTitle';
 
 export default function Code() {
   const { projectId } = useParams<{ projectId: string }>();
@@ -21,6 +25,24 @@ export default function Code() {
   
   const { data: connection, isLoading: connectionLoading, refetch: refetchConnection } = useGitHubConnection(projectId);
   const { data: selectedReposData } = useSelectedRepos(projectId);
+  
+  const { data: project } = useQuery({
+    queryKey: ['project', projectId],
+    queryFn: async () => {
+      if (!projectId) return null;
+      const { data, error } = await supabase
+        .from('projects')
+        .select('*')
+        .eq('id', projectId)
+        .maybeSingle();
+      
+      if (error) throw error;
+      return data;
+    },
+    enabled: !!projectId,
+  });
+
+  usePageTitle("Código", project?.name);
   // Verificar se connected é true
   // Se connection existe mas connected é false, pode ser que a conexão não foi encontrada
   const hasConnection = connection?.connected === true;
@@ -260,22 +282,18 @@ export default function Code() {
             }
           />
           <Route
-            path="prs"
+            path="repos/:repoId/pull-requests"
             element={
-              <div className="h-full p-6">
-                <div className="text-center text-muted-foreground">
-                  Pull Requests - Em desenvolvimento
-                </div>
+              <div className="h-full">
+                <PRList />
               </div>
             }
           />
           <Route
-            path="prs/:prId"
+            path="repos/:repoId/pull-requests/:prNumber"
             element={
-              <div className="h-full p-6">
-                <div className="text-center text-muted-foreground">
-                  PR Detail - Em desenvolvimento
-                </div>
+              <div className="h-full">
+                <PRDetail />
               </div>
             }
           />

@@ -1,8 +1,10 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import { validateAuth } from "../_shared/permissions.ts";
+import { validateAuth, canMergePR, getProjectRole } from "../_shared/permissions.ts";
 import { Octokit } from "https://esm.sh/@octokit/rest@20.0.1";
 import { processAutoLink } from "../_shared/auto-link.ts";
+import { logAuditEvent } from "../_shared/audit.ts";
+import { updateTarefaStatusFromPR } from "../_shared/tarefa-status.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -51,9 +53,16 @@ serve(async (req) => {
     const normalizedPath = path === "/" ? "/" : path.replace(/^\/+/, "/");
     const pathParts = normalizedPath.split("/").filter(Boolean);
 
+    console.log("github-pulls path parsing:", {
+      originalPath: url.pathname,
+      normalizedPath,
+      pathParts,
+      method: req.method,
+    });
+
     // GET /repos/:repoId/pulls
-    if (req.method === "GET" && pathParts.length === 2 && pathParts[1] === "pulls") {
-      const repoId = pathParts[0];
+    if (req.method === "GET" && pathParts.length === 3 && pathParts[0] === "repos" && pathParts[2] === "pulls") {
+      const repoId = pathParts[1];
       return await handleGetPulls(req, repoId, userId);
     }
 
@@ -62,6 +71,34 @@ serve(async (req) => {
       const repoId = pathParts[1];
       const prNumber = parseInt(pathParts[2]);
       return await handleGetPRDetail(repoId, prNumber, userId);
+    }
+
+    // POST /repos/:repoId/pulls/:number/reviews
+    if (req.method === "POST" && pathParts.length === 5 && pathParts[0] === "repos" && pathParts[2] === "pulls" && pathParts[4] === "reviews") {
+      const repoId = pathParts[1];
+      const prNumber = parseInt(pathParts[3]);
+      return await handleSubmitReview(req, repoId, prNumber, userId);
+    }
+
+    // POST /repos/:repoId/pulls/:number/comments
+    if (req.method === "POST" && pathParts.length === 5 && pathParts[0] === "repos" && pathParts[2] === "pulls" && pathParts[4] === "comments") {
+      const repoId = pathParts[1];
+      const prNumber = parseInt(pathParts[3]);
+      return await handleCreateComment(req, repoId, prNumber, userId);
+    }
+
+    // POST /repos/:repoId/pulls/:number/inline-comments
+    if (req.method === "POST" && pathParts.length === 5 && pathParts[0] === "repos" && pathParts[2] === "pulls" && pathParts[4] === "inline-comments") {
+      const repoId = pathParts[1];
+      const prNumber = parseInt(pathParts[3]);
+      return await handleCreateInlineComment(req, repoId, prNumber, userId);
+    }
+
+    // POST /repos/:repoId/pulls/:number/merge
+    if (req.method === "POST" && pathParts.length === 5 && pathParts[0] === "repos" && pathParts[2] === "pulls" && pathParts[4] === "merge") {
+      const repoId = pathParts[1];
+      const prNumber = parseInt(pathParts[3]);
+      return await handleMergePR(req, repoId, prNumber, userId);
     }
 
     return new Response(
@@ -303,6 +340,360 @@ async function handleGetPRDetail(repoId: string, prNumber: number, userId: strin
     console.error("Error fetching PR detail:", error);
     return new Response(
       JSON.stringify({ error: "Failed to fetch PR detail" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+}
+
+/**
+ * POST /repos/:repoId/pulls/:number/reviews - Submeter review
+ */
+async function handleSubmitReview(req: Request, repoId: string, prNumber: number, userId: string) {
+  const clientData = await getGitHubClientForRepo(repoId);
+  if (!clientData) {
+    return new Response(
+      JSON.stringify({ error: "Repository or connection not found" }),
+      { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  const { octokit, repo, projectId } = clientData;
+  const [owner, repoName] = repo.full_name.split("/");
+
+  try {
+    const body = await req.json();
+    const { state, body: reviewBody } = body;
+
+    if (!state || !["APPROVED", "CHANGES_REQUESTED", "COMMENTED"].includes(state)) {
+      return new Response(
+        JSON.stringify({ error: "Invalid review state" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Submit review to GitHub
+    const { data: review } = await octokit.pulls.createReview({
+      owner,
+      repo: repoName,
+      pull_number: prNumber,
+      event: state === "APPROVED" ? "APPROVE" : state === "CHANGES_REQUESTED" ? "REQUEST_CHANGES" : "COMMENT",
+      body: reviewBody || "",
+    });
+
+    // Get user info
+    const { data: user } = await supabase
+      .from("profiles")
+      .select("full_name")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    // Get PR record
+    const { data: prRecord } = await supabase
+      .from("pull_requests")
+      .select("id")
+      .eq("repo_id", repoId)
+      .eq("number", prNumber)
+      .maybeSingle();
+
+    if (prRecord) {
+      // Save review to database
+      await supabase
+        .from("pr_reviews")
+        .upsert({
+          pr_id: prRecord.id,
+          reviewer_id: userId,
+          reviewer_username: review.user.login,
+          state: state,
+          body: reviewBody || "",
+          submitted_at: review.submitted_at,
+        }, {
+          onConflict: "pr_id,reviewer_id",
+        });
+
+      // Auto-link TSK-123 if present in review body
+      if (reviewBody) {
+        await processAutoLink(
+          reviewBody,
+          projectId,
+          repoId,
+          "pull_request",
+          prRecord.id,
+          { branchName: "", prNumber }
+        );
+      }
+
+      // Log audit event
+      await logAuditEvent(
+        userId,
+        "REVIEW",
+        "pull_request",
+        prRecord.id,
+        null,
+        { state, pr_number: prNumber, repo_id: repoId }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({ review }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  } catch (error) {
+    console.error("Error submitting review:", error);
+    return new Response(
+      JSON.stringify({ error: "Failed to submit review" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+}
+
+/**
+ * POST /repos/:repoId/pulls/:number/comments - Criar comentário geral
+ */
+async function handleCreateComment(req: Request, repoId: string, prNumber: number, userId: string) {
+  const clientData = await getGitHubClientForRepo(repoId);
+  if (!clientData) {
+    return new Response(
+      JSON.stringify({ error: "Repository or connection not found" }),
+      { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  const { octokit, repo, projectId } = clientData;
+  const [owner, repoName] = repo.full_name.split("/");
+
+  try {
+    const body = await req.json();
+    const { body: commentBody } = body;
+
+    if (!commentBody) {
+      return new Response(
+        JSON.stringify({ error: "Comment body is required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Create comment on GitHub
+    const { data: comment } = await octokit.issues.createComment({
+      owner,
+      repo: repoName,
+      issue_number: prNumber,
+      body: commentBody,
+    });
+
+    // Get PR record
+    const { data: prRecord } = await supabase
+      .from("pull_requests")
+      .select("id")
+      .eq("repo_id", repoId)
+      .eq("number", prNumber)
+      .maybeSingle();
+
+    if (prRecord) {
+      // Save comment to database
+      await supabase
+        .from("pr_comments")
+        .insert({
+          pr_id: prRecord.id,
+          author_id: userId,
+          body: commentBody,
+        });
+
+      // Auto-link TSK-123 if present
+      await processAutoLink(
+        commentBody,
+        projectId,
+        repoId,
+        "pull_request",
+        prRecord.id,
+        { branchName: "", prNumber }
+      );
+    }
+
+    return new Response(
+      JSON.stringify({ comment }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  } catch (error) {
+    console.error("Error creating comment:", error);
+    return new Response(
+      JSON.stringify({ error: "Failed to create comment" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+}
+
+/**
+ * POST /repos/:repoId/pulls/:number/inline-comments - Criar comentário inline
+ */
+async function handleCreateInlineComment(req: Request, repoId: string, prNumber: number, userId: string) {
+  const clientData = await getGitHubClientForRepo(repoId);
+  if (!clientData) {
+    return new Response(
+      JSON.stringify({ error: "Repository or connection not found" }),
+      { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  const { octokit, repo, projectId } = clientData;
+  const [owner, repoName] = repo.full_name.split("/");
+
+  try {
+    const body = await req.json();
+    const { body: commentBody, path, line, side, in_reply_to_id } = body;
+
+    if (!commentBody || !path || !line) {
+      return new Response(
+        JSON.stringify({ error: "Comment body, path, and line are required" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Get PR to find commit SHA
+    const { data: pr } = await octokit.pulls.get({
+      owner,
+      repo: repoName,
+      pull_number: prNumber,
+    });
+
+    // Create inline comment on GitHub
+    const { data: comment } = await octokit.pulls.createReviewComment({
+      owner,
+      repo: repoName,
+      pull_number: prNumber,
+      body: commentBody,
+      path,
+      line,
+      side: side === "LEFT" ? "LEFT" : "RIGHT",
+      commit_id: pr.head.sha,
+      in_reply_to: in_reply_to_id ? parseInt(in_reply_to_id) : undefined,
+    });
+
+    // Get PR record
+    const { data: prRecord } = await supabase
+      .from("pull_requests")
+      .select("id")
+      .eq("repo_id", repoId)
+      .eq("number", prNumber)
+      .maybeSingle();
+
+    if (prRecord) {
+      // Save comment to database
+      await supabase
+        .from("pr_comments")
+        .insert({
+          pr_id: prRecord.id,
+          author_id: userId,
+          body: commentBody,
+          path,
+          line_number: line,
+          side: side,
+          in_reply_to_id: in_reply_to_id || null,
+        });
+    }
+
+    return new Response(
+      JSON.stringify({ comment }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  } catch (error) {
+    console.error("Error creating inline comment:", error);
+    return new Response(
+      JSON.stringify({ error: "Failed to create inline comment" }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+}
+
+/**
+ * POST /repos/:repoId/pulls/:number/merge - Fazer merge do PR
+ */
+async function handleMergePR(req: Request, repoId: string, prNumber: number, userId: string) {
+  const clientData = await getGitHubClientForRepo(repoId);
+  if (!clientData) {
+    return new Response(
+      JSON.stringify({ error: "Repository or connection not found" }),
+      { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  }
+
+  const { octokit, repo, projectId } = clientData;
+  const [owner, repoName] = repo.full_name.split("/");
+
+  try {
+    // Get PR record to check permissions
+    const { data: prRecord } = await supabase
+      .from("pull_requests")
+      .select("id")
+      .eq("repo_id", repoId)
+      .eq("number", prNumber)
+      .maybeSingle();
+
+    if (!prRecord) {
+      return new Response(
+        JSON.stringify({ error: "PR not found" }),
+        { status: 404, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Check merge permissions
+    const canMerge = await canMergePR(userId, prRecord.id);
+    if (!canMerge) {
+      return new Response(
+        JSON.stringify({ error: "Insufficient permissions to merge PR" }),
+        { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    const body = await req.json();
+    const { method = "merge", commit_message } = body;
+
+    // Merge PR on GitHub
+    const { data: mergeResult } = await octokit.pulls.merge({
+      owner,
+      repo: repoName,
+      pull_number: prNumber,
+      merge_method: method as "merge" | "squash" | "rebase",
+      commit_message: commit_message,
+    });
+
+    if (!mergeResult.merged) {
+      return new Response(
+        JSON.stringify({ error: mergeResult.message || "Failed to merge PR" }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Update PR state in database
+    await supabase
+      .from("pull_requests")
+      .update({
+        state: "MERGED",
+        merged_at: new Date().toISOString(),
+        merge_commit_sha: mergeResult.sha,
+      })
+      .eq("id", prRecord.id);
+
+    // Update tarefa status
+    await updateTarefaStatusFromPR(prRecord.id, "MERGED", projectId);
+
+    // Log audit event
+    await logAuditEvent(
+      userId,
+      "MERGE",
+      "pull_request",
+      prRecord.id,
+      null,
+      { method, pr_number: prNumber, repo_id: repoId, merge_sha: mergeResult.sha }
+    );
+
+    return new Response(
+      JSON.stringify({ merged: true, sha: mergeResult.sha }),
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+    );
+  } catch (error) {
+    console.error("Error merging PR:", error);
+    return new Response(
+      JSON.stringify({ error: "Failed to merge PR" }),
       { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
