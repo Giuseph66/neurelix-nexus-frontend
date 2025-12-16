@@ -1,0 +1,55 @@
+import { Toaster } from "@/components/ui/toaster";
+import { Toaster as Sonner } from "@/components/ui/sonner";
+import { TooltipProvider } from "@/components/ui/tooltip";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { AuthProvider } from "@/contexts/AuthContext";
+import { ThemeProvider } from "next-themes";
+
+import Auth from "./pages/Auth";
+import Projects from "./pages/Projects";
+import { ProjectLayout } from "./components/layout/ProjectLayout";
+import Dashboard from "./pages/project/Dashboard";
+import Whiteboard from "./pages/project/Whiteboard";
+import Tarefas from "./pages/project/Tarefas";
+import Code from "./pages/project/Code";
+import Team from "./pages/project/Team";
+import Settings from "./pages/project/Settings";
+import NotFound from "./pages/NotFound";
+
+const queryClient = new QueryClient();
+
+const App = () => (
+  <QueryClientProvider client={queryClient}>
+    <ThemeProvider attribute="class" defaultTheme="dark" enableSystem={false}>
+      <AuthProvider>
+        <TooltipProvider>
+          <Toaster />
+          <Sonner />
+          <BrowserRouter>
+            <Routes>
+              <Route path="/" element={<Navigate to="/projects" replace />} />
+              <Route path="/auth" element={<Auth />} />
+              <Route path="/projects" element={<Projects />} />
+
+              {/* Project routes with layout */}
+              <Route path="/project/:projectId" element={<ProjectLayout />}>
+                <Route index element={<Navigate to="dashboard" replace />} />
+                <Route path="dashboard" element={<Dashboard />} />
+                <Route path="whiteboard" element={<Whiteboard />} />
+                <Route path="tarefas" element={<Tarefas />} />
+                <Route path="code" element={<Code />} />
+                <Route path="team" element={<Team />} />
+                <Route path="settings" element={<Settings />} />
+              </Route>
+
+              <Route path="*" element={<NotFound />} />
+            </Routes>
+          </BrowserRouter>
+        </TooltipProvider>
+      </AuthProvider>
+    </ThemeProvider>
+  </QueryClientProvider>
+);
+
+export default App;

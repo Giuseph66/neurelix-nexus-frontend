@@ -1,0 +1,235 @@
+PLATAFORMA UNIFICADA (MIRO + JIRA + BITBUCKET) — ESPECIFICAÇÃO RESUMIDA (CONVERSA)
+
+Data: 13/12/2025
+Autor da ideia: Usuário
+Objetivo deste arquivo: registrar, em blocos, a ideia, fundamentação, idealização e funcionamento por etapas do produto discutido.
+
+============================================================
+1) VISÃO GERAL DA IDEIA
+============================================================
+Criar uma única plataforma que reúna, no mesmo lugar:
+- Um QUADRO BRANCO colaborativo (inspirado no Miro): para ideação, brainstorm, rascunhos e planejamento visual.
+- Um GERENCIADOR DE TRABALHO estilo Jira: com Kanban/Sprints/Backlog, responsáveis, prazos e status.
+- Um MÓDULO de CÓDIGO estilo Bitbucket: repositórios Git, branches, pull requests, revisões e pipelines (CI/CD).
+
+A grande proposta é: “do rascunho ao código”, sem alternar ferramentas.
+O quadro branco vira, de forma concreta, tarefas e fluxo de trabalho, e depois se liga ao desenvolvimento (commits/PRs).
+
+============================================================
+2) CONTEXTO E FUNDAMENTAÇÃO (POR QUE EXISTE ESPAÇO PARA ISSO)
+============================================================
+- Hoje existem ferramentas excelentes, mas separadas:
+  • Miro: colaboração visual e quadro branco.
+  • Jira: gestão de projetos, issues e fluxos de trabalho.
+  • Bitbucket: hospedagem Git e colaboração no código.
+- Existem integrações entre elas, mas o objetivo é uma plataforma ÚNICA, nativa, com experiência “sem costuras”.
+- Necessidade central: transformar planejamento visual em execução rastreável (tarefas → código), com histórico claro de origem e destino de cada etapa.
+
+============================================================
+3) OBJETIVO PRINCIPAL DO PRODUTO
+============================================================
+Permitir que uma equipe:
+1) Crie ideias e desenhe o plano no quadro branco.
+2) Converta essas ideias automaticamente em tarefas/épicos/boards (Kanban).
+3) Modele visualmente um fluxograma (de onde veio → para onde vai) para guiar etapas.
+4) Conecte cada tarefa ao repositório, commits, PRs e entregas.
+Resultado: rastreabilidade completa de ponta a ponta.
+
+============================================================
+4) ESTRUTURA EM “3 MUNDOS” (MÓDULOS PRINCIPAIS)
+============================================================
+4.1) Mundo A — Quadro Branco (Visual / Ideação)
+- Espaço infinito ou com páginas
+- Multicursor e edição simultânea
+- Elementos livres (desenho e formas)
+- Estruturas de fluxos (caixas e conectores)
+- Anotações (post-its, textos, comentários)
+- Seleções, agrupamento e camadas
+- IA para transformar rascunho em estrutura
+
+4.2) Mundo B — Trabalho (Kanban / Execução)
+- Board Kanban com colunas (ex.: Backlog → Em progresso → Revisão → Concluído)
+- Cartões (cards) com:
+  • título, descrição
+  • responsável(is)
+  • prioridade
+  • prazo
+  • checklist
+  • anexos
+  • comentários
+  • etiquetas
+- Regras de fluxo (transições, critérios, bloqueios)
+- Sprints (opcional), relatórios e métricas (futuro)
+
+4.3) Mundo C — Código (Git / Entrega)
+- Repositórios Git por projeto
+- Branches, commits e tags
+- Pull Requests com revisão
+- Vincular PR/commit a cards do board
+- Pipelines de CI/CD (futuro): build/test/deploy
+
+============================================================
+5) FOCO DA CONVERSA ATÉ AQUI: O QUADRO BRANCO
+============================================================
+O quadro branco é o “coração visual” do sistema:
+- O usuário planeja e rascunha, e depois concretiza aquilo em tarefas e fluxos.
+
+O quadro branco deve conter elementos para:
+- Brainstorm e ideação rápida
+- Estruturação de processos
+- Criação de fluxos e etapas (para virar Kanban)
+- Definição de origem/destino de cada etapa (fluxograma rastreável)
+
+============================================================
+6) FERRAMENTAS QUE O QUADRO BRANCO DEVE CONTER (DIRETO AO PONTO)
+============================================================
+Ferramentas de desenho e edição:
+- Lápis (desenho à mão livre)
+- Borracha (apagar traços/elementos)
+- Selecionar (seleção por clique e por área/lasso)
+- Mover / Arrastar (posicionar elementos)
+- Zoom / Pan (navegar no quadro)
+- Desfazer / Refazer
+
+Ferramentas de formas e organização:
+- Retângulo / Círculo / Losango (padrões de fluxograma)
+- Linha / Seta / Conector inteligente (auto-encaixe em nós)
+- Caixas de texto e títulos
+- Post-its (anotações rápidas)
+- Agrupar / Desagrupar
+- Alinhar / Distribuir
+- Camadas (opcional) e “bloquear” elementos (para não mexer sem querer)
+
+Ferramentas de fluxo de trabalho:
+- Nó de processo (etapa)
+- Nó de decisão (condição)
+- Nó de início / fim
+- Conectores com rótulo (ex.: “aprovação”, “depende de”, “bloqueado por”)
+- Criação rápida de “mini-kanban” dentro do quadro (para rascunho)
+
+Ferramentas de colaboração:
+- Comentários em elementos
+- Menções (@), histórico de alterações (futuro)
+- Ponteiro/multicursor
+- Modo apresentação (futuro)
+
+============================================================
+7) IA NO QUADRO BRANCO (TRANSFORMAR RASCUNHO EM ALGO CONCRETO)
+============================================================
+Ideia central:
+- O usuário seleciona uma área do quadro (um rascunho/fluxo/post-its) e pede:
+  “Transformar em fluxo de trabalho concreto”.
+
+O que a IA faz (alvos possíveis):
+A) Converter desenho em fluxograma limpo:
+- Reconhecer caixas, setas, textos
+- Ajustar alinhamento, padronizar formas
+- Manter sentido de conexão e hierarquia
+
+B) Converter área em backlog/board Kanban:
+- Cada post-it/caixa vira um card
+- Sugerir colunas iniciais (ex.: Planejado/Executando/Revisão/Concluído)
+- Extrair responsáveis se houver menções, ou pedir preenchimento depois
+- Gerar descrições e checklist a partir do texto do quadro
+
+C) Converter em “épico + tarefas”:
+- Identificar agrupamentos e subetapas
+- Criar épicos/temas e tarefas filhas
+- Definir dependências com base nas setas
+
+Resultado: a área selecionada ganha “vida” como itens reais do gerenciador de trabalho.
+
+============================================================
+8) TRANSFORMAÇÃO DO QUADRO BRANCO EM KANBAN (ESTILO JIRA)
+============================================================
+Objetivo: tudo que está no quadro branco deve poder “virar execução”.
+
+Mecanismo proposto:
+1) Usuário cria rascunho no quadro branco (post-its + setas + etapas).
+2) Seleciona um conjunto/área e escolhe: “Converter em Board”.
+3) O sistema cria:
+   - um Board Kanban novo (ou adiciona ao board existente)
+   - cards correspondentes aos elementos selecionados
+   - relações (dependências/origem-destino) baseadas no fluxograma
+4) O usuário organiza:
+   - responsável
+   - prazo
+   - prioridade
+   - status (coluna)
+
+Ponto essencial:
+- Cada card deve manter um “link de origem” para o elemento do quadro branco.
+- Isso garante rastreabilidade: “de onde veio essa etapa?”
+
+============================================================
+9) FLUXOGRAMA RASTREÁVEL (DE ONDE VEIO → PARA ONDE VAI)
+============================================================
+Além do Kanban, o usuário quer um fluxograma para:
+- entender a trajetória de uma etapa
+- saber onde inserir uma etapa
+- saber qual parte ela deve fazer
+
+Requisitos funcionais:
+- Cada etapa (nó) tem um ID e metadados (nome, descrição, tipo)
+- Conectores definem relações (próximo passo, depende de, condicional)
+- Ao converter para Kanban, as relações viram:
+  • dependências entre cards
+  • caminho provável (pipeline) do trabalho
+- Visualização:
+  • “mapa” do processo (fluxograma)
+  • “board” do trabalho (Kanban)
+- Navegação cruzada:
+  • abrir um card e ver seu nó no fluxograma
+  • clicar no nó e abrir o card associado
+
+============================================================
+10) INTEGRAÇÃO COM CÓDIGO (VISÃO DE FUTURO A PARTIR DA IDEIA)
+============================================================
+Embora o foco tenha sido o quadro branco, a visão completa inclui:
+- Um card do Kanban pode ser ligado a:
+  • branch (feature/XYZ)
+  • commits
+  • pull request
+- Isso cria trilha completa:
+  QUADRO BRANCO (ideia) → FLUXO (etapas) → KANBAN (execução) → CÓDIGO (entrega)
+
+============================================================
+11) EXPERIÊNCIA “SEM COSTURAS” (PRINCÍPIOS DE UX)
+============================================================
+- Tudo no mesmo produto, mesma conta, mesmas permissões
+- Ações simples:
+  • “Rascunhar”
+  • “Selecionar”
+  • “Converter”
+  • “Atribuir”
+  • “Desenvolver”
+- O usuário não deve “sentir” que mudou de ferramenta, só mudou de modo (Visual/Trabalho/Código).
+
+============================================================
+12) DEFINIÇÃO DE PRIMEIRO MVP (MÍNIMO VIÁVEL) — SUGESTÃO
+============================================================
+MVP 1 — Quadro branco funcional (base):
+- lápis, borracha, seleção, formas básicas, setas/conectores, post-its, texto
+- colaboração em tempo real (mínimo)
+- salvar/abrir boards
+
+MVP 2 — Converter para Kanban:
+- criar board Kanban
+- converter post-its/caixas em cards
+- manter link de origem (card ↔ elemento do quadro)
+
+MVP 3 — Fluxograma rastreável:
+- nós + conectores
+- dependências básicas
+- navegação cruzada (card ↔ nó)
+
+MVP 4 — Código (mínimo):
+- criar repositório Git
+- vincular card a branch/commit (metadado simples)
+
+============================================================
+13) RESUMO FINAL (EM UMA FRASE)
+============================================================
+Uma plataforma única onde o planejamento visual (quadro branco) vira execução (Kanban) e se conecta diretamente ao desenvolvimento (Git), com rastreabilidade completa via fluxograma.
+
+Fim do arquivo.

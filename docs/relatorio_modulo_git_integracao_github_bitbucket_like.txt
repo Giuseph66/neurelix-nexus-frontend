@@ -1,0 +1,309 @@
+RELATÓRIO (TXT) — MÓDULO DE CÓDIGO (GIT) DO PROJETO
+Versão: 1.0 (gerado a partir da conversa + especificações anteriores)
+Data: 2025-12-15
+Autor: Assistente (Alexandre)
+Projeto: Plataforma Unificada (Quadro Branco + “Gira” + Git)
+
+───────────────────────────────────────────────────────────────────────────────
+0) RESUMO EXECUTIVO (O QUE ESTE MÓDULO É)
+───────────────────────────────────────────────────────────────────────────────
+O “Mundo C — Código” será um módulo de “repositórios Git” dentro do seu site, inspirado na
+experiência de Bitbucket/GitHub (clone simples, mas legítimo), com foco em:
+- Consultar repositórios, branches, commits e pull requests;
+- Fazer Code Review dentro do seu sistema;
+- Conectar tudo ao “Gira” (tarefas/backlog/kanban) e ao Quadro Branco (origem/menções);
+- Manter rastreabilidade fim-a-fim: ideia → tarefa → branch/commit → review → merge → entrega;
+- Ser “legítimo”: usar APIs oficiais, OAuth/GitHub App, webhooks e boas práticas (sem gambiarra).
+
+Primeiro provedor recomendado: GitHub (por APIs maduras e suporte amplo). O design deve permitir
+adicionar outros provedores (GitLab, Gitea, Azure DevOps, etc.) depois.
+
+───────────────────────────────────────────────────────────────────────────────
+1) PRINCÍPIOS E OBJETIVOS
+───────────────────────────────────────────────────────────────────────────────
+1.1 Objetivos
+- Ter um “painel de código” interno para o time, acessível no laptop e iPad (web responsivo).
+- Trazer para dentro do projeto o essencial do Bitbucket/GitHub:
+  • Repositórios • Branches • Commits • PRs • Reviews • Status checks
+- Interligar automaticamente com o “Gira” e com o Quadro Branco:
+  • Criar branch/PR a partir de uma tarefa
+  • Atualizar status da tarefa conforme PR evolui
+  • Mostrar origem (nó/área do quadro) e histórico unificado
+
+1.2 Não-objetivos (para manter “clone simples”)
+- Não replicar Marketplace de integrações externas (tudo interno).
+- Não tentar ser um “Git client completo” no browser (push/pull local).
+- Não implementar CI/CD completo no MVP (apenas leitura de status checks e pipelines, se útil).
+
+───────────────────────────────────────────────────────────────────────────────
+2) ARQUITETURA RECOMENDADA (LEGÍTIMA, SEGURA E ESCALÁVEL)
+───────────────────────────────────────────────────────────────────────────────
+2.1 Camadas
+A) Front-end (Web)
+- Telas e componentes para navegar em repositórios, PRs, diffs, reviews, etc.
+- UX responsiva (laptop + iPad): foco em leitura, revisão e ações rápidas.
+
+B) Back-end (API do seu projeto)
+- “Integration Service” (camada de integração Git) com adaptadores por provedor:
+  • GitHubAdapter (MVP)
+  • GitLabAdapter (futuro)
+  • GiteaAdapter (futuro / self-host)
+- Faz chamadas às APIs oficiais e normaliza dados para o seu banco.
+
+C) Persistência (Banco do projeto)
+- Guarda conexões, mapeamentos, caches, vínculos com tarefas e logs de auditoria.
+
+D) Webhooks (eventos)
+- Endpoint do seu back-end para receber eventos do provedor:
+  • PR opened/updated/merged
+  • Push/commit
+  • Review submitted
+  • Check runs / status checks
+- Atualiza o sistema em tempo real sem depender de “polling” pesado.
+
+2.2 Por que NÃO chamar a API do Git direto do front-end
+- Segurança: token no front-end é risco alto.
+- Controle: back-end centraliza rate limit, caching, auditoria e masking de dados sensíveis.
+- Multi-usuário: cada usuário pode ter permissões diferentes; o back-end aplica as regras.
+
+───────────────────────────────────────────────────────────────────────────────
+3) AUTENTICAÇÃO E PERMISSÕES (GITHUB)
+───────────────────────────────────────────────────────────────────────────────
+3.1 Recomendação: GitHub App (preferível ao OAuth App)
+- GitHub Apps são recomendados por serem mais seguros:
+  • permissões “fine-grained”
+  • tokens de curta duração
+  • controle do acesso por repositório/organização
+(Boas práticas e docs oficiais reforçam essa preferência.)
+
+3.2 Modos de conexão (MVP)
+- Conexão por “Instalação do GitHub App”:
+  • usuário instala o app em uma org ou repositório específico
+  • o sistema recebe um “installation_id”
+  • o back-end gera tokens curtos para consultar dados necessários
+
+3.3 Controle interno de permissões
+Mesmo que o GitHub controle o acesso ao repo, o seu sistema deve controlar:
+- Quem pode “ver código” vs “fazer review” vs “aprovar/merge”
+- Quem pode vincular repo ao projeto
+- Quem pode criar branch/PR via tarefas do Gira
+
+───────────────────────────────────────────────────────────────────────────────
+4) LIMITES, PERFORMANCE E CONFIABILIDADE (RATE LIMIT + CACHE + WEBHOOKS)
+───────────────────────────────────────────────────────────────────────────────
+4.1 Rate limits (GitHub REST)
+- Sem autenticação: 60 req/h por IP
+- Com autenticação: muito maior (padrão conhecido é 5.000 req/h por usuário)
+Estratégia do sistema:
+- usar autenticação (GitHub App) sempre que possível
+- cachear respostas (repositórios, branches, commits recentes)
+- usar webhooks para “atualização em tempo real”
+- backoff, retry e controle de concorrência (evitar estourar limites secundários)
+
+───────────────────────────────────────────────────────────────────────────────
+5) MODELO DE DADOS (ENTIDADES INTERNAS)
+───────────────────────────────────────────────────────────────────────────────
+Sugestão de entidades normalizadas (independentes do provedor):
+
+5.1 Conexões
+- ProviderConnection
+  • id, provider (github), ownerType (user/org), installationId, status
+  • createdAt, updatedAt
+  • secretsRef (referência segura — nunca salvar token “cru” em texto)
+
+5.2 Catálogo
+- Repo
+  • providerRepoId, fullName, defaultBranch, visibility
+- Branch
+  • name, lastCommitSha, ahead/behind (opcional)
+- Commit
+  • sha, author, date, message, url
+- PullRequest
+  • number, title, status (open/closed/merged), base, head, author
+- Review
+  • state (approved/changes_requested/commented), reviewer, date
+- CheckRun / StatusCheck (opcional MVP+)
+  • name, conclusion, detailsUrl, updatedAt
+
+5.3 Vínculos com o Gira e Quadro Branco
+- WorkItemLink
+  • workItemId (tarefa/bug/epic)
+  • repoId, branchName, prNumber, commitSha
+- WhiteboardOriginLink
+  • workItemId
+  • boardId + nodeId/areaId (origem)
+- AuditEvent
+  • actorId, action, entity, before/after, timestamp
+
+───────────────────────────────────────────────────────────────────────────────
+6) TELAS (CATÁLOGO COMPLETO) — “BITBUCKET-LIKE” DENTRO DO SEU SITE
+───────────────────────────────────────────────────────────────────────────────
+Abaixo, as telas possíveis para configurar e operar a integração Git dentro do seu sistema.
+
+6.1 Onboarding e Configuração
+1) “Conectar Git” (Wizard)
+- Selecionar provedor (MVP: GitHub)
+- Instruções de instalação do GitHub App
+- Selecionar organizações/repositórios permitidos
+- Confirmar permissões e finalizar
+
+2) Conexões (Lista)
+- Ver conexões ativas
+- Status (ok/erro), última sincronização, eventos recentes
+- Revogar / reconectar
+
+3) Configuração por Projeto (em “Configurações do Projeto”)
+- Quais repositórios pertencem ao projeto X?
+- Regras padrão:
+  • prefixo de branch (ex.: feature/{taskId}-nome)
+  • política de review (mínimo 1 aprovação)
+  • exigir checks antes de merge (se usar)
+- Mapear “colunas do Gira” ↔ “estados do PR”
+  • Ex.: PR aberto → tarefa em “Em andamento”
+  • PR aprovado → tarefa em “Revisão”
+  • PR mergeado → tarefa em “Concluído”
+
+6.2 Navegação e Operação
+4) Catálogo de Repositórios
+- Lista de repos integrados (filtro por org/projeto)
+- Ações: abrir repo, vincular ao projeto, favoritos
+
+5) Visão do Repositório (Overview)
+- Readme (opcional), últimos commits, PRs recentes, branches ativas
+- Indicadores: PRs pendentes, reviews pendentes, checks falhando
+
+6) Branches
+- Lista de branches
+- Busca e filtros (por prefixo, por tarefa vinculada)
+- Ações: comparar branches, abrir histórico
+
+7) Commits (Histórico)
+- Linha do tempo de commits
+- Visual “diff” básico (arquivo por arquivo)
+- Linkar commit a tarefa (se não estiver linkado)
+
+8) Pull Requests (Lista)
+- Filtros: open/merged/closed, por autor, por revisor, por label
+- Destaques: PRs sem review, PRs com checks falhando
+
+9) Pull Request (Detalhe)
+- Título, descrição, commits, arquivos alterados, diff
+- Comentários por linha e gerais
+- Status checks
+- Botões:
+  • Aprovar
+  • Solicitar alterações
+  • Comentar
+  • (Opcional) Merge (se política permitir)
+
+10) Code Review (Painel)
+- “Inbox do revisor”: tudo que precisa de review
+- Ordenação por urgência, bloqueios e deadline
+- Ação rápida: abrir diff, aprovar, pedir mudanças
+
+6.3 Misturas com “Gira” e Quadro Branco (diferencial do seu produto)
+11) Dentro da Tarefa (Gira → Código)
+- Bloco “Código”
+  • repo, branch, PR, commits
+  • status do PR e checks
+- Botões:
+  • Criar branch a partir da tarefa
+  • Criar PR a partir da tarefa
+  • Vincular PR existente
+
+12) Linha do Tempo Unificada (Histórico)
+- A mesma timeline mostrando:
+  • origem no quadro branco
+  • criação/mudança de status da tarefa
+  • criação de branch e commits
+  • abertura de PR e reviews
+  • merge e conclusão
+
+13) Navegação por @Menção (em comentários/descrições)
+- @repo / @branch / @pr / @commit
+- abrir painel rápido (preview) e navegar sem perder contexto
+
+6.4 Segurança, Auditoria e Observabilidade
+14) Auditoria (Log)
+- Quem conectou repo, quem aprovou PR, quem fez merge, quem mudou regra
+- Exportável (opcional) e filtrável
+
+15) Webhooks (Status)
+- “Últimos eventos recebidos”
+- Erros de assinatura, falhas de processamento, replays (opcional)
+- Modo diagnóstico para suporte
+
+───────────────────────────────────────────────────────────────────────────────
+7) FLUXOS COMPLETOS (INÍCIO → MEIO → FIM) PARA IMPLEMENTAR
+───────────────────────────────────────────────────────────────────────────────
+Fluxo A — Conectar GitHub no Projeto
+INÍCIO: Admin do projeto abre “Conectar Git” e instala o GitHub App.
+MEIO: escolhe repositórios permitidos e define regras (review/checks/branch prefix).
+FIM: repos aparecem no catálogo; timeline e webhooks começam a registrar eventos.
+
+Fluxo B — Tarefa (Gira) → Branch → PR → Review → Merge → Tarefa concluída
+INÍCIO: cria tarefa no Backlog ou a tarefa nasce do Quadro Branco.
+MEIO:
+- ao mover para “Em andamento”, botão “Criar branch”
+- trabalha no código; commits aparecem no item
+- cria PR pelo próprio sistema
+FIM:
+- review ocorre no painel interno
+- ao mergear, o sistema marca tarefa como concluída + registra tudo na timeline
+
+Fluxo C — Origem (Quadro Branco) → Impacto no Código
+INÍCIO: tarefa tem link de origem (nó/área) no quadro branco.
+MEIO: ao abrir o PR, usuário visualiza “de onde veio” e “o que mudou”.
+FIM: ao concluir, o quadro pode receber um “selo/estado” de concluído no nó.
+
+───────────────────────────────────────────────────────────────────────────────
+8) MVP RECOMENDADO (O ESSENCIAL PARA FECHAR O CICLO)
+───────────────────────────────────────────────────────────────────────────────
+MVP 1 (fundação)
+- Conectar GitHub via GitHub App (instalação, permissões, storage seguro)
+- Catálogo de repos + overview
+- Branches + commits (leitura)
+- PRs (lista + detalhe básico)
+- Vínculo PR ↔ tarefa (Gira)
+- Webhook para atualizar PR/commits em tempo real
+
+MVP 2 (review de verdade)
+- Tela Code Review (inbox)
+- Comentários por PR (e se possível por linha no diff)
+- Aprovar / pedir alterações (respeitando permissões internas)
+- Atualização automática de status da tarefa
+
+───────────────────────────────────────────────────────────────────────────────
+9) V2 / EVOLUÇÃO (SEM PERDER A SIMPLICIDADE)
+───────────────────────────────────────────────────────────────────────────────
+- Status checks + visão de pipelines (GitHub Actions) dentro do PR
+- Templates:
+  • template de branch name
+  • template de PR description (puxa dados da tarefa)
+- Regras avançadas (gates):
+  • exigir 2 approvals
+  • exigir checks verdes
+  • bloquear merge sem checklist da tarefa
+- Releases / Tags (histórico de entregas)
+- Multi-provedor (GitLab/Gitea) com a mesma UI
+
+───────────────────────────────────────────────────────────────────────────────
+10) CRITÉRIOS DE ACEITAÇÃO (TESTES PRÁTICOS)
+───────────────────────────────────────────────────────────────────────────────
+- Consigo conectar GitHub sem expor token no front-end.
+- Consigo listar repositórios e abrir branches/commits.
+- Consigo ver PRs e seus estados.
+- Consigo vincular uma tarefa do Gira a um PR.
+- Ao mergear PR, a tarefa muda automaticamente para “Concluído” (se regra estiver ativa).
+- A timeline unificada mostra o histórico completo (tarefa + PR + review + merge).
+- Webhooks atualizam o sistema sem precisar ficar “recarregando”.
+
+───────────────────────────────────────────────────────────────────────────────
+11) REFERÊNCIAS TÉCNICAS (OFICIAIS, PARA IMPLEMENTAÇÃO “LEGÍTIMA”)
+───────────────────────────────────────────────────────────────────────────────
+- GitHub REST API: autenticação e rate limits (docs.github.com)
+- GitHub Apps vs OAuth Apps: recomendação de GitHub App e tokens de curta duração (docs.github.com)
+- Octokit: client oficial para consumir API do GitHub em JavaScript/Node (github.com/octokit)
+
+───────────────────────────────────────────────────────────────────────────────
+FIM DO RELATÓRIO
