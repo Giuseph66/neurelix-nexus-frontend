@@ -28,7 +28,7 @@ import { useWhiteboardPresence } from "@/hooks/useWhiteboardPresence";
 import { useWhiteboardBranches } from "@/hooks/useWhiteboardBranches";
 import { useWhiteboardComments } from "@/hooks/useWhiteboardComments";
 import { useMentions } from "@/hooks/useMentions";
-import { FabricObject, IText, Rect } from "fabric";
+import { FabricObject, IText, Rect, Canvas as FabricCanvas } from "fabric";
 import { Badge } from "@/components/ui/badge";
 import { usePageTitle } from "@/hooks/usePageTitle";
 
@@ -88,10 +88,16 @@ export default function Whiteboard() {
 
   usePageTitle("Quadro Branco", project?.name);
 
-  // Real-time collaboration
+  // Real-time collaboration - use a stable ref to prevent re-subscriptions
+  const canvasInstanceRef = useRef<FabricCanvas | null>(null);
+  
+  useEffect(() => {
+    canvasInstanceRef.current = canvasRef.current?.getCanvas() ?? null;
+  }, [selectedWhiteboardId, loading]);
+
   const { saveObjectsRealtime } = useRealtimeWhiteboard({
     whiteboardId: selectedWhiteboardId,
-    canvas: canvasRef.current?.getCanvas() ?? null,
+    canvas: canvasInstanceRef.current,
     enabled: !!selectedWhiteboardId && !loading,
   });
 
@@ -154,7 +160,7 @@ export default function Whiteboard() {
     } else {
       setBranches([]);
     }
-  }, [selectedWhiteboardId, whiteboard?.parent_branch_id, getBranches]);
+  }, [selectedWhiteboardId, whiteboard?.parent_branch_id]);
 
   const handleCreateWhiteboard = async () => {
     if (!newBoardName.trim()) return;
@@ -170,9 +176,12 @@ export default function Whiteboard() {
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     saveTimeoutRef.current = setTimeout(() => {
       saveObjects(objects);
-      saveObjectsRealtime(objects);
+      // Only call realtime save if enabled
+      if (selectedWhiteboardId && !loading) {
+        saveObjectsRealtime(objects);
+      }
     }, 1000);
-  }, [saveObjects, saveObjectsRealtime]);
+  }, [saveObjects, saveObjectsRealtime, selectedWhiteboardId, loading]);
 
   const handleViewportChange = useCallback((viewport: CanvasViewport) => {
     setZoom(viewport.zoom);

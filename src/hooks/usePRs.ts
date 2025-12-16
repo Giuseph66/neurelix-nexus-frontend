@@ -78,44 +78,6 @@ export function usePR(repoId: string | undefined, prNumber: number | undefined) 
 }
 
 /**
- * Hook para criar Pull Request
- */
-export function useCreatePR() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: async (input: CreatePRInput) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/git-prs`, {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(input),
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create PR');
-      }
-
-      return await response.json();
-    },
-    onSuccess: (data, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['prs', variables.repoId] });
-      queryClient.invalidateQueries({ queryKey: ['repos'] });
-      toast.success('Pull Request criada com sucesso!');
-    },
-    onError: (error: Error) => {
-      toast.error(error.message || 'Erro ao criar PR');
-    },
-  });
-}
-
-/**
  * Hook para submeter review
  */
 export function useSubmitReview() {
@@ -225,6 +187,58 @@ export function useCreatePRComment() {
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Erro ao adicionar comentário');
+    },
+  });
+}
+
+/**
+ * Hook para criar novo Pull Request
+ */
+export function useCreatePR() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ 
+      repoId, 
+      title, 
+      description, 
+      head, 
+      base, 
+      draft = false 
+    }: { 
+      repoId: string; 
+      title: string; 
+      description?: string; 
+      head: string; 
+      base: string; 
+      draft?: boolean;
+    }) => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Not authenticated');
+
+      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/repos/${repoId}/pulls`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ title, description, head, base, draft }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Erro ao criar Pull Request');
+      }
+
+      return await response.json();
+    },
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['prs', variables.repoId] });
+      queryClient.invalidateQueries({ queryKey: ['pr', variables.repoId] });
+      toast.success('Pull Request criado com sucesso!');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Erro ao criar Pull Request');
     },
   });
 }

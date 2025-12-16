@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -28,6 +28,8 @@ import { formatDistanceToNow, format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Textarea } from '@/components/ui/textarea';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { DiffViewer } from '@/components/codigo/DiffViewer';
+import { useCreateInlineComment } from '@/hooks/usePRs';
 
 export function PRDetail() {
   const { repoId, prNumber: prNumberStr } = useParams<{ 
@@ -46,11 +48,23 @@ export function PRDetail() {
   const { data, isLoading, error } = usePR(repoId, prNumber);
   const submitReview = useSubmitReview();
   const createComment = useCreatePRComment();
+  const createInlineComment = useCreateInlineComment();
   const mergePR = useMergePR();
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [reviewState, setReviewState] = useState<'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED'>('COMMENTED');
   const [reviewBody, setReviewBody] = useState('');
   const [commentBody, setCommentBody] = useState('');
+  const [selectedFile, setSelectedFile] = useState<string | undefined>();
+  const [inlineCommentDialogOpen, setInlineCommentDialogOpen] = useState(false);
+  const [inlineCommentData, setInlineCommentData] = useState<{ file: string; line: number; side: 'old' | 'new' } | null>(null);
+  const [inlineCommentBody, setInlineCommentBody] = useState('');
+
+  // Auto-select first file when files are loaded
+  useEffect(() => {
+    if (data?.pr?.files && data.pr.files.length > 0 && !selectedFile) {
+      setSelectedFile(data.pr.files[0].filename);
+    }
+  }, [data?.pr?.files, selectedFile]);
 
   if (isLoading) {
     return (
@@ -331,9 +345,9 @@ export function PRDetail() {
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-hidden">
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="h-full flex flex-col">
-          <div className="border-b px-4">
+      <div className="flex-1 overflow-hidden flex flex-col">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="flex-1 flex flex-col min-h-0">
+          <div className="border-b px-4 flex-shrink-0">
             <TabsList>
               <TabsTrigger value="description">Descrição</TabsTrigger>
               <TabsTrigger value="commits">
@@ -357,23 +371,28 @@ export function PRDetail() {
             </TabsList>
           </div>
 
-          <ScrollArea className="flex-1">
-            <div className="p-4">
-              <TabsContent value="description" className="mt-4">
-                {pr.description ? (
-                  <Card>
-                    <CardContent className="p-4">
-                      <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
-                        {pr.description}
-                      </div>
-                    </CardContent>
-                  </Card>
-                ) : (
-                  <p className="text-muted-foreground">Sem descrição</p>
-                )}
-              </TabsContent>
+          <div className="flex-1 overflow-hidden">
+            <TabsContent value="description" className="mt-0 h-full m-0">
+              <ScrollArea className="h-full">
+                <div className="p-4">
+                  {pr.description ? (
+                    <Card>
+                      <CardContent className="p-4">
+                        <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
+                          {pr.description}
+                        </div>
+                      </CardContent>
+                    </Card>
+                  ) : (
+                    <p className="text-muted-foreground">Sem descrição</p>
+                  )}
+                </div>
+              </ScrollArea>
+            </TabsContent>
 
-              <TabsContent value="commits" className="mt-4">
+            <TabsContent value="commits" className="mt-0 h-full m-0">
+              <ScrollArea className="h-full">
+                <div className="p-4">
                 {pr.commits && pr.commits.length > 0 ? (
                   <div className="space-y-2">
                     {pr.commits.map((commit: any) => (
@@ -399,98 +418,230 @@ export function PRDetail() {
                 ) : (
                   <p className="text-muted-foreground">Nenhum commit</p>
                 )}
-              </TabsContent>
+                </div>
+              </ScrollArea>
+            </TabsContent>
 
-              <TabsContent value="files" className="mt-4">
+            <TabsContent value="files" className="mt-0 h-full m-0">
                 {pr.files && pr.files.length > 0 ? (
-                  <div className="space-y-2">
-                    {pr.files.map((file: any) => (
-                      <Card key={file.filename}>
-                        <CardHeader>
-                          <div className="flex items-center justify-between">
-                            <CardTitle className="text-base font-mono">{file.filename}</CardTitle>
-                            <div className="flex items-center gap-2">
-                              {file.status === 'added' && <Badge className="bg-green-600">+{file.additions}</Badge>}
-                              {file.status === 'removed' && <Badge variant="destructive">-{file.deletions}</Badge>}
-                              {file.status === 'modified' && (
-                                <>
-                                  <Badge className="bg-green-600">+{file.additions}</Badge>
-                                  <Badge variant="destructive">-{file.deletions}</Badge>
-                                </>
-                              )}
-                              <Badge variant="outline">{file.changes} mudanças</Badge>
-                            </div>
+                  <div className="h-full">
+                    <DiffViewer
+                      files={pr.files}
+                      selectedFile={selectedFile}
+                      onFileSelect={setSelectedFile}
+                      onLineClick={(file, line, side) => {
+                        setInlineCommentData({ file, line, side });
+                        setInlineCommentDialogOpen(true);
+                      }}
+                    />
+                    <Dialog open={inlineCommentDialogOpen} onOpenChange={setInlineCommentDialogOpen}>
+                      <DialogContent>
+                        <DialogHeader>
+                          <DialogTitle>
+                            Comentário inline em {inlineCommentData?.file}:{inlineCommentData?.line}
+                          </DialogTitle>
+                        </DialogHeader>
+                        <div className="space-y-4">
+                          <Textarea
+                            placeholder="Escreva seu comentário..."
+                            value={inlineCommentBody}
+                            onChange={(e) => setInlineCommentBody(e.target.value)}
+                            rows={6}
+                          />
+                          <div className="flex justify-end gap-2">
+                            <Button variant="outline" onClick={() => {
+                              setInlineCommentDialogOpen(false);
+                              setInlineCommentBody('');
+                              setInlineCommentData(null);
+                            }}>
+                              Cancelar
+                            </Button>
+                            <Button
+                              onClick={async () => {
+                                if (repoId && prNumber && inlineCommentData && inlineCommentBody) {
+                                  await createInlineComment.mutateAsync({
+                                    repoId,
+                                    prNumber,
+                                    body: inlineCommentBody,
+                                    path: inlineCommentData.file,
+                                    line: inlineCommentData.line,
+                                    side: inlineCommentData.side === 'old' ? 'LEFT' : 'RIGHT',
+                                  });
+                                  setInlineCommentDialogOpen(false);
+                                  setInlineCommentBody('');
+                                  setInlineCommentData(null);
+                                }
+                              }}
+                              disabled={createInlineComment.isPending || !inlineCommentBody}
+                            >
+                              {createInlineComment.isPending ? 'Enviando...' : 'Comentar'}
+                            </Button>
                           </div>
-                        </CardHeader>
-                        <CardContent>
-                          <p className="text-sm text-muted-foreground">
-                            {file.patch ? `${file.patch.split('\n').length} linhas de diff` : 'Sem diff disponível'}
-                          </p>
-                        </CardContent>
-                      </Card>
-                    ))}
+                        </div>
+                      </DialogContent>
+                    </Dialog>
                   </div>
                 ) : (
-                  <p className="text-muted-foreground">Nenhum arquivo alterado</p>
+                  <div className="flex items-center justify-center h-full">
+                    <p className="text-muted-foreground">Nenhum arquivo alterado</p>
+                  </div>
                 )}
-              </TabsContent>
+            </TabsContent>
 
-              <TabsContent value="reviews" className="mt-4">
-                {pr.reviews && pr.reviews.length > 0 ? (
-                  <div className="space-y-4">
-                    {pr.reviews.map((review: any) => (
-                      <Card key={review.id}>
-                        <CardHeader>
-                          <div className="flex items-center justify-between">
-                            <div className="flex items-center gap-2">
-                              <Avatar className="h-8 w-8">
-                                <AvatarFallback>{review.reviewer?.[0]?.toUpperCase()}</AvatarFallback>
-                              </Avatar>
-                              <div>
-                                <p className="font-medium">{review.reviewer}</p>
-                                <p className="text-sm text-muted-foreground">
-                                  {review.submitted_at && formatDistanceToNow(new Date(review.submitted_at), { addSuffix: true, locale: ptBR })}
-                                </p>
+            <TabsContent value="reviews" className="mt-0 h-full m-0">
+              <ScrollArea className="h-full">
+                <div className="p-4 space-y-6">
+                  {/* Reviews */}
+                  {pr.reviews && pr.reviews.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-semibold mb-3">Reviews</h3>
+                      <div className="space-y-4">
+                        {pr.reviews.map((review: any) => (
+                          <Card key={review.id}>
+                            <CardHeader>
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <Avatar className="h-8 w-8">
+                                    <AvatarFallback>{review.reviewer?.[0]?.toUpperCase()}</AvatarFallback>
+                                  </Avatar>
+                                  <div>
+                                    <p className="font-medium">{review.reviewer}</p>
+                                    <p className="text-sm text-muted-foreground">
+                                      {review.submitted_at && formatDistanceToNow(new Date(review.submitted_at), { addSuffix: true, locale: ptBR })}
+                                    </p>
+                                  </div>
+                                </div>
+                                <div>
+                                  {review.state === 'APPROVED' && (
+                                    <Badge className="bg-green-600">
+                                      <Check className="h-3 w-3 mr-1" />
+                                      Aprovado
+                                    </Badge>
+                                  )}
+                                  {review.state === 'CHANGES_REQUESTED' && (
+                                    <Badge variant="destructive">
+                                      <X className="h-3 w-3 mr-1" />
+                                      Alterações solicitadas
+                                    </Badge>
+                                  )}
+                                  {review.state === 'COMMENTED' && (
+                                    <Badge variant="secondary">
+                                      <MessageCircle className="h-3 w-3 mr-1" />
+                                      Comentado
+                                    </Badge>
+                                  )}
+                                </div>
                               </div>
-                            </div>
-                            <div>
-                              {review.state === 'APPROVED' && (
-                                <Badge className="bg-green-600">
-                                  <Check className="h-3 w-3 mr-1" />
-                                  Aprovado
-                                </Badge>
-                              )}
-                              {review.state === 'CHANGES_REQUESTED' && (
-                                <Badge variant="destructive">
-                                  <X className="h-3 w-3 mr-1" />
-                                  Alterações solicitadas
-                                </Badge>
-                              )}
-                              {review.state === 'COMMENTED' && (
-                                <Badge variant="secondary">
+                            </CardHeader>
+                            {review.body && (
+                              <CardContent>
+                                <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
+                                  {review.body}
+                                </div>
+                              </CardContent>
+                            )}
+                          </Card>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* General Comments */}
+                  {pr.comments?.general && pr.comments.general.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-semibold mb-3">Comentários Gerais</h3>
+                      <div className="space-y-4">
+                        {pr.comments.general.map((comment: any) => (
+                          <Card key={comment.id}>
+                            <CardHeader>
+                              <div className="flex items-center gap-2">
+                                <Avatar className="h-8 w-8">
+                                  <AvatarFallback>{comment.author_username?.[0]?.toUpperCase()}</AvatarFallback>
+                                </Avatar>
+                                <div>
+                                  <p className="font-medium">{comment.author_username}</p>
+                                  <p className="text-sm text-muted-foreground">
+                                    {formatDistanceToNow(new Date(comment.created_at), { addSuffix: true, locale: ptBR })}
+                                  </p>
+                                </div>
+                              </div>
+                            </CardHeader>
+                            <CardContent>
+                              <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
+                                {comment.body}
+                              </div>
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Inline Comments */}
+                  {pr.comments?.inline && pr.comments.inline.length > 0 && (
+                    <div>
+                      <h3 className="text-sm font-semibold mb-3">Comentários Inline</h3>
+                      <div className="space-y-4">
+                        {pr.comments.inline.map((comment: any) => (
+                          <Card key={comment.id}>
+                            <CardHeader>
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <Avatar className="h-8 w-8">
+                                    <AvatarFallback>{comment.author_username?.[0]?.toUpperCase()}</AvatarFallback>
+                                  </Avatar>
+                                  <div>
+                                    <p className="font-medium">{comment.author_username}</p>
+                                    <p className="text-sm text-muted-foreground">
+                                      {comment.path}:{comment.line} • {formatDistanceToNow(new Date(comment.created_at), { addSuffix: true, locale: ptBR })}
+                                    </p>
+                                  </div>
+                                </div>
+                                {comment.in_reply_to_id && (
+                                  <Badge variant="outline" className="text-xs">
+                                    Resposta
+                                  </Badge>
+                                )}
+                              </div>
+                            </CardHeader>
+                            <CardContent>
+                              <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
+                                {comment.body}
+                              </div>
+                              {comment.in_reply_to_id && (
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="mt-2"
+                                  onClick={() => {
+                                    setInlineCommentData({ 
+                                      file: comment.path || '', 
+                                      line: comment.line || 0, 
+                                      side: comment.side === 'LEFT' ? 'old' : 'new' 
+                                    });
+                                    setInlineCommentDialogOpen(true);
+                                  }}
+                                >
                                   <MessageCircle className="h-3 w-3 mr-1" />
-                                  Comentado
-                                </Badge>
+                                  Responder
+                                </Button>
                               )}
-                            </div>
-                          </div>
-                        </CardHeader>
-                        {review.body && (
-                          <CardContent>
-                            <div className="prose prose-sm dark:prose-invert max-w-none whitespace-pre-wrap">
-                              {review.body}
-                            </div>
-                          </CardContent>
-                        )}
-                      </Card>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-muted-foreground">Nenhum review ainda</p>
-                )}
-              </TabsContent>
-            </div>
-          </ScrollArea>
+                            </CardContent>
+                          </Card>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {(!pr.reviews || pr.reviews.length === 0) && 
+                   (!pr.comments?.general || pr.comments.general.length === 0) && 
+                   (!pr.comments?.inline || pr.comments.inline.length === 0) && (
+                    <p className="text-muted-foreground">Nenhum review ou comentário ainda</p>
+                  )}
+                </div>
+              </ScrollArea>
+            </TabsContent>
+          </div>
         </Tabs>
       </div>
     </div>

@@ -22,6 +22,7 @@ import { usePRs } from '@/hooks/usePRs';
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import type { PullRequest } from '@/types/codigo';
+import { CreatePRDialog } from './CreatePRDialog';
 
 export function PRList() {
   const { repoId } = useParams<{ repoId: string }>();
@@ -116,11 +117,19 @@ export function PRList() {
       <div className="border-b p-4 space-y-4">
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-semibold">Pull Requests</h1>
-          {projectId && repoId && (
-            <Button onClick={() => navigate(`/project/${projectId}/code/repos/${repoId}`)}>
-              Voltar
-            </Button>
-          )}
+          <div className="flex items-center gap-2">
+            {projectId && repoId && (
+              <CreatePRDialog 
+                repoId={repoId} 
+                projectId={projectId}
+              />
+            )}
+            {projectId && repoId && (
+              <Button variant="outline" onClick={() => navigate(`/project/${projectId}/code/repos/${repoId}`)}>
+                Voltar
+              </Button>
+            )}
+          </div>
         </div>
 
         {/* Filtros */}
