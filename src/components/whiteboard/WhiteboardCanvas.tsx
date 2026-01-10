@@ -26,87 +26,92 @@ export interface WhiteboardCanvasRef {
   renderAll: () => void;
 }
 
+type ObjectsChangeReason = 'draw_end' | 'text_change' | 'transform';
+
 interface WhiteboardCanvasProps {
+  whiteboardId: string | null;
   activeTool: ToolType;
   strokeColor: string;
   fillColor: string;
   strokeWidth: number;
-  onObjectsChange: (objects: FabricObject[]) => void;
+  onObjectsChange: (objects: FabricObject[], reason?: ObjectsChangeReason) => void;
   onViewportChange: (viewport: CanvasViewport) => void;
   onSelectionChange: (object: FabricObject | null) => void;
   initialViewport?: CanvasViewport;
-  initialObjects?: Array<{ properties: Record<string, unknown> }>;
+  initialSnapshot?: Record<string, unknown> | null;
   onCanUndoChange: (canUndo: boolean) => void;
   onCanRedoChange: (canRedo: boolean) => void;
   showGrid?: boolean;
+  onToolChange?: (tool: ToolType) => void;
+  onContextMenu?: (e: React.MouseEvent, object: FabricObject | null) => void;
 }
 
 // Draw grid on the lower canvas (background layer)
 function drawGrid(canvas: FabricCanvas, gridSize: number = 20) {
   const lowerCanvas = canvas.lowerCanvasEl;
   if (!lowerCanvas) return;
-  
+
   const ctx = lowerCanvas.getContext('2d');
   if (!ctx) return;
-  
+
   const width = canvas.getWidth();
   const height = canvas.getHeight();
   const zoom = canvas.getZoom();
   const vpt = canvas.viewportTransform;
-  
+
   if (!vpt) return;
-  
+
   // Save and set background (using design system neutral)
   ctx.save();
-  ctx.fillStyle = 'hsl(0, 0%, 8%)'; // Dark background
+  ctx.fillStyle = '#000000'; // Black background
   ctx.fillRect(0, 0, width, height);
-  
+
   const offsetX = vpt[4];
   const offsetY = vpt[5];
   const scaledGridSize = gridSize * zoom;
-  
+
   const startX = Math.floor(-offsetX / scaledGridSize) * scaledGridSize + offsetX;
   const startY = Math.floor(-offsetY / scaledGridSize) * scaledGridSize + offsetY;
-  
+
   // Minor grid lines
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.08)';
   ctx.lineWidth = 1;
-  
+
   for (let x = startX; x < width; x += scaledGridSize) {
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, height);
     ctx.stroke();
   }
-  
+
   for (let y = startY; y < height; y += scaledGridSize) {
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(width, y);
     ctx.stroke();
   }
-  
+
   // Major grid lines (every 5 cells)
   const majorGridSize = scaledGridSize * 5;
   const majorStartX = Math.floor(-offsetX / majorGridSize) * majorGridSize + offsetX;
   const majorStartY = Math.floor(-offsetY / majorGridSize) * majorGridSize + offsetY;
-  
+
   ctx.strokeStyle = 'rgba(255, 255, 255, 0.15)';
-  
+
   for (let x = majorStartX; x < width; x += majorGridSize) {
     ctx.beginPath();
     ctx.moveTo(x, 0);
     ctx.lineTo(x, height);
     ctx.stroke();
   }
-  
+
   for (let y = majorStartY; y < height; y += majorGridSize) {
     ctx.beginPath();
     ctx.moveTo(0, y);
     ctx.lineTo(width, y);
     ctx.stroke();
   }
-  
+
   ctx.restore();
 }
 
@@ -114,13 +119,13 @@ function drawGrid(canvas: FabricCanvas, gridSize: number = 20) {
 function createArrow(x1: number, y1: number, x2: number, y2: number, color: string, width: number): Group {
   const headLength = 15;
   const angle = Math.atan2(y2 - y1, x2 - x1);
-  
+
   const line = new Line([x1, y1, x2, y2], {
     stroke: color,
     strokeWidth: width,
     selectable: false,
   });
-  
+
   // Arrowhead points
   const arrowHead = new Polygon([
     { x: x2, y: y2 },
@@ -132,7 +137,7 @@ function createArrow(x1: number, y1: number, x2: number, y2: number, color: stri
     strokeWidth: 1,
     selectable: false,
   });
-  
+
   return new Group([line, arrowHead], {
     selectable: true,
     evented: true,
@@ -140,6 +145,7 @@ function createArrow(x1: number, y1: number, x2: number, y2: number, color: stri
 }
 
 export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvasProps>(({
+  whiteboardId,
   activeTool,
   strokeColor,
   fillColor,
@@ -148,20 +154,27 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
   onViewportChange,
   onSelectionChange,
   initialViewport = { x: 0, y: 0, zoom: 1 },
-  initialObjects = [],
+  initialSnapshot = null,
   onCanUndoChange,
   onCanRedoChange,
   showGrid = true,
+  onToolChange,
+  onContextMenu,
 }, ref) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const fabricRef = useRef<FabricCanvas | null>(null);
   const [isDrawing, setIsDrawing] = useState(false);
+  const [isPanning, setIsPanning] = useState(false); // Track middle-mouse pan state
   const lastPosRef = useRef({ x: 0, y: 0 });
   const startPointRef = useRef<{ x: number; y: number } | null>(null);
   const tempShapeRef = useRef<FabricObject | null>(null);
   const clipboardRef = useRef<FabricObject[]>([]);
-  
+  const objectsLoadedRef = useRef(false);
+  const initialObjectsRef = useRef<string>('');
+  const whiteboardIdRef = useRef<string>('');
+  const lastReasonRef = useRef<ObjectsChangeReason | undefined>(undefined);
+
   const { saveState, undo, redo, canUndo, canRedo } = useWhiteboardHistory();
 
   useEffect(() => {
@@ -169,15 +182,15 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     onCanRedoChange(canRedo);
   }, [canUndo, canRedo, onCanUndoChange, onCanRedoChange]);
 
-  // Initialize canvas
+  // Initialize canvas - ONLY ONCE
   useEffect(() => {
-    if (!canvasRef.current || !containerRef.current) return;
+    if (!canvasRef.current || !containerRef.current || fabricRef.current) return;
 
     const container = containerRef.current;
     const canvas = new FabricCanvas(canvasRef.current, {
       width: container.offsetWidth,
       height: container.offsetHeight,
-      backgroundColor: "#1e293b", // Dark background
+      backgroundColor: "#000000", // Black background
       selection: true,
       preserveObjectStacking: true,
     });
@@ -190,6 +203,8 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     canvas.freeDrawingBrush.width = strokeWidth;
 
     fabricRef.current = canvas;
+    (canvas as any).__suppressOnObjectsChange = false;
+    canvas.subTargetCheck = true;
 
     const handleResize = () => {
       canvas.setDimensions({
@@ -209,58 +224,107 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       });
     }
 
-    // Load initial objects from database
-    if (initialObjects && initialObjects.length > 0) {
-      console.log('[Canvas] Loading', initialObjects.length, 'initial objects');
-      const jsonObjects = initialObjects.map(obj => obj.properties);
-      canvas.loadFromJSON({ 
-        objects: jsonObjects,
-        background: "#1e293b"
-      }).then(() => {
-        canvas.renderAll();
-        // Save initial state after loading
-        saveState(JSON.stringify(canvas.toJSON()));
-      });
-    } else {
-      // Save initial state
-      setTimeout(() => {
-        saveState(JSON.stringify(canvas.toJSON()));
-      }, 100);
-    }
-
-    const saveAndNotify = () => {
-      onObjectsChange(canvas.getObjects());
+    const saveAndNotify = (reason?: ObjectsChangeReason) => {
+      if ((canvas as any).__suppressOnObjectsChange) {
+        return;
+      }
+      lastReasonRef.current = reason;
+      onObjectsChange(canvas.getObjects(), reason);
       saveState(JSON.stringify(canvas.toJSON()));
     };
 
-    canvas.on('object:modified', saveAndNotify);
-    canvas.on('object:added', saveAndNotify);
-    canvas.on('object:removed', saveAndNotify);
-    
+    const handleObjectModified = () => saveAndNotify('transform');
+    const handleObjectAdded = () => saveAndNotify('draw_end');
+    const handleObjectRemoved = () => saveAndNotify('transform');
+    const handleTextChanged = () => saveAndNotify('text_change');
+    // Fabric free drawing often emits `path:created` (and not always `object:added`)
+    const handlePathCreated = () => saveAndNotify('draw_end');
+
+    canvas.on('object:modified', handleObjectModified);
+    canvas.on('object:added', handleObjectAdded);
+    canvas.on('object:removed', handleObjectRemoved);
+    canvas.on('text:changed' as any, handleTextChanged as any);
+    canvas.on('path:created' as any, handlePathCreated as any);
+
     canvas.on('selection:created', (e) => {
       onSelectionChange(e.selected?.[0] || null);
     });
-    
+
     canvas.on('selection:updated', (e) => {
       onSelectionChange(e.selected?.[0] || null);
     });
-    
+
     canvas.on('selection:cleared', () => {
       onSelectionChange(null);
     });
 
+    // Save initial empty state
+    setTimeout(() => {
+      saveState(JSON.stringify(canvas.toJSON()));
+    }, 100);
+
     return () => {
       resizeObserver.disconnect();
+      canvas.off('object:modified', handleObjectModified);
+      canvas.off('object:added', handleObjectAdded);
+      canvas.off('object:removed', handleObjectRemoved);
+      canvas.off('text:changed' as any, handleTextChanged as any);
+      canvas.off('path:created' as any, handlePathCreated as any);
       canvas.dispose();
+      fabricRef.current = null;
+      objectsLoadedRef.current = false;
     };
-  }, [initialObjects]);
+  }, []); // Only run once on mount
+
+  // Load initial objects - separate effect to prevent recreation
+  useEffect(() => {
+    const canvas = fabricRef.current;
+    if (!canvas) return;
+
+    const currentWhiteboardId = whiteboardId ?? 'none';
+    const snapshotKey = JSON.stringify(initialSnapshot ?? {});
+
+    // Detect if whiteboard changed
+    if (currentWhiteboardId !== whiteboardIdRef.current) {
+      // Whiteboard changed, reset loaded flag
+      objectsLoadedRef.current = false;
+      whiteboardIdRef.current = currentWhiteboardId;
+    }
+
+    // Only load if objects actually changed and haven't been loaded yet
+    if (snapshotKey === initialObjectsRef.current && objectsLoadedRef.current) {
+      return;
+    }
+    initialObjectsRef.current = snapshotKey;
+
+    // Load initial snapshot from database
+    const canvasAny = canvas as any;
+    canvasAny.__suppressOnObjectsChange = true;
+    canvas.clear();
+    canvas.backgroundColor = "#000000";
+
+    const jsonToLoad = initialSnapshot && typeof initialSnapshot === 'object'
+      ? initialSnapshot
+      : { objects: [], background: "#000000" };
+
+    canvas.loadFromJSON(jsonToLoad as any).then(() => {
+      // Force a consistent background (avoids black/blue flip across loaders)
+      canvas.backgroundColor = "#000000";
+      canvas.renderAll();
+      saveState(JSON.stringify(canvas.toJSON()));
+      objectsLoadedRef.current = true;
+      canvasAny.__suppressOnObjectsChange = false;
+    }).catch(() => {
+      canvasAny.__suppressOnObjectsChange = false;
+    });
+  }, [whiteboardId, initialSnapshot, saveState]);
 
   // Update brush settings
   useEffect(() => {
     const canvas = fabricRef.current;
     if (!canvas?.freeDrawingBrush) return;
-    
-    canvas.freeDrawingBrush.color = activeTool === 'eraser' ? '#1e293b' : strokeColor;
+
+    canvas.freeDrawingBrush.color = activeTool === 'eraser' ? '#000000' : strokeColor;
     canvas.freeDrawingBrush.width = activeTool === 'eraser' ? 20 : strokeWidth;
   }, [strokeColor, strokeWidth, activeTool]);
 
@@ -275,7 +339,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     // IMPORTANT: Disable selection for shape tools to prevent dragging existing objects
     const isShapeTool = ['rectangle', 'circle', 'line', 'arrow', 'text', 'postit'].includes(activeTool);
-    
+
     switch (activeTool) {
       case 'select':
         canvas.selection = true;
@@ -322,7 +386,33 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     const handleMouseDown = (opt: TPointerEventInfo<TPointerEvent>) => {
       const e = opt.e as MouseEvent;
-      
+
+      // Middle mouse button (button 1) for panning
+      if (e.button === 1) {
+        setIsPanning(true);
+        canvas.defaultCursor = 'grabbing';
+        canvas.selection = false; // Disable selection while panning
+        lastPosRef.current = { x: e.clientX, y: e.clientY };
+        e.preventDefault();
+        return;
+      }
+
+      // Right click (button 2) for context menu
+      if (e.button === 2) {
+        if (onContextMenu) {
+          const pointer = canvas.getPointer(e);
+          // Check if we clicked on an object
+          const target = canvas.findTarget(e);
+          if (target) {
+            canvas.setActiveObject(target);
+            onSelectionChange(target);
+          }
+          // Pass the original mouse event for positioning
+          onContextMenu(e as unknown as React.MouseEvent, target || null);
+        }
+        return;
+      }
+
       // For shape tools, always start drawing, don't select
       if (activeTool === 'pan') {
         setIsDrawing(true);
@@ -336,30 +426,54 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     };
 
     const handleMouseMove = (opt: TPointerEventInfo<TPointerEvent>) => {
-      if (!isDrawing) return;
       const e = opt.e as MouseEvent;
 
-      if (activeTool === 'pan') {
+      // Handle middle-mouse panning
+      if (isPanning) {
         const deltaX = e.clientX - lastPosRef.current.x;
         const deltaY = e.clientY - lastPosRef.current.y;
-        
+
         const vpt = canvas.viewportTransform;
         if (vpt) {
           vpt[4] += deltaX;
           vpt[5] += deltaY;
           canvas.requestRenderAll();
-          
+
           onViewportChange({
             x: -vpt[4] / canvas.getZoom(),
             y: -vpt[5] / canvas.getZoom(),
             zoom: canvas.getZoom(),
           });
         }
-        
+
+        lastPosRef.current = { x: e.clientX, y: e.clientY };
+        return;
+      }
+
+      if (!isDrawing) return;
+
+      if (activeTool === 'pan') {
+        const deltaX = e.clientX - lastPosRef.current.x;
+        const deltaY = e.clientY - lastPosRef.current.y;
+
+        const vpt = canvas.viewportTransform;
+        if (vpt) {
+          vpt[4] += deltaX;
+          vpt[5] += deltaY;
+          canvas.requestRenderAll();
+
+          onViewportChange({
+            x: -vpt[4] / canvas.getZoom(),
+            y: -vpt[5] / canvas.getZoom(),
+            zoom: canvas.getZoom(),
+          });
+        }
+
         lastPosRef.current = { x: e.clientX, y: e.clientY };
       } else if (startPointRef.current && ['rectangle', 'circle', 'line', 'arrow'].includes(activeTool)) {
+        // ... (existing shape drawing logic)
         const pointer = canvas.getPointer(e);
-        
+
         if (tempShapeRef.current) {
           canvas.remove(tempShapeRef.current);
         }
@@ -415,12 +529,19 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
 
     const handleMouseUp = (opt: TPointerEventInfo<TPointerEvent>) => {
       const e = opt.e as MouseEvent;
-      
+
+      if (isPanning) {
+        setIsPanning(false);
+        canvas.defaultCursor = 'default';
+        canvas.selection = true; // Re-enable selection
+        return;
+      }
+
       if (activeTool === 'pan') {
         canvas.defaultCursor = 'grab';
       } else if (startPointRef.current) {
         const pointer = canvas.getPointer(e);
-        
+
         if (tempShapeRef.current) {
           canvas.remove(tempShapeRef.current);
           tempShapeRef.current = null;
@@ -466,42 +587,52 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             case 'arrow':
               shape = createArrow(startX, startY, pointer.x, pointer.y, strokeColor, strokeWidth);
               break;
-            case 'text':
-              const text = new IText('Texto', {
-                left: startX,
-                top: startY,
-                fontSize: 20,
-                fill: strokeColor,
-                fontFamily: 'Inter, sans-serif',
-              });
-              canvas.add(text);
-              text.set({ selectable: true, evented: true });
-              canvas.setActiveObject(text);
-              text.enterEditing();
-              break;
-            case 'postit':
-              const postit = new Rect({
-                left: startX,
-                top: startY,
-                width: 150,
-                height: 150,
-                fill: '#fef08a',
-                stroke: '#eab308',
-                strokeWidth: 1,
-                rx: 4,
-                ry: 4,
-              });
-              canvas.add(postit);
-              
-              const postitText = new IText('Nota', {
-                left: startX + 10,
-                top: startY + 10,
-                fontSize: 14,
-                fill: '#1e293b',
-                fontFamily: 'Inter, sans-serif',
-              });
-              canvas.add(postitText);
-              break;
+          case 'text': {
+            const text = new IText('Texto', {
+              left: startX,
+              top: startY,
+              fontSize: 20,
+              fill: strokeColor,
+              fontFamily: 'Inter, sans-serif',
+            });
+            canvas.add(text);
+            text.set({ selectable: true, evented: true });
+            canvas.setActiveObject(text);
+            text.enterEditing();
+            if (onToolChange) onToolChange('select');
+            break;
+          }
+          case 'postit': {
+            const postit = new Rect({
+              left: 0,
+              top: 0,
+              width: 150,
+              height: 150,
+              fill: '#fef08a',
+              stroke: '#eab308',
+              strokeWidth: 1,
+              rx: 4,
+              ry: 4,
+            });
+
+            const postitText = new IText('Nota', {
+              left: 10,
+              top: 10,
+              fontSize: 14,
+              fill: '#1e293b',
+              fontFamily: 'Inter, sans-serif',
+            });
+
+            const group = new Group([postit, postitText], {
+              left: startX,
+              top: startY,
+            });
+
+            canvas.add(group);
+            canvas.setActiveObject(group);
+            if (onToolChange) onToolChange('select');
+            break;
+          }
           }
 
           if (shape) {
@@ -521,10 +652,11 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
           text.set({ selectable: true, evented: true });
           canvas.setActiveObject(text);
           text.enterEditing();
+          if (onToolChange) onToolChange('select');
         } else if (activeTool === 'postit') {
           const postit = new Rect({
-            left: startX,
-            top: startY,
+            left: 0,
+            top: 0,
             width: 150,
             height: 150,
             fill: '#fef08a',
@@ -533,19 +665,23 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
             rx: 4,
             ry: 4,
           });
-          canvas.add(postit);
-          
+
           const postitText = new IText('Nota', {
-            left: startX + 10,
-            top: startY + 10,
+            left: 10,
+            top: 10,
             fontSize: 14,
             fill: '#1e293b',
             fontFamily: 'Inter, sans-serif',
           });
-          canvas.add(postitText);
-          postitText.set({ selectable: true, evented: true });
-          canvas.setActiveObject(postitText);
-          postitText.enterEditing();
+
+          const group = new Group([postit, postitText], {
+            left: startX,
+            top: startY,
+          });
+
+          canvas.add(group);
+          canvas.setActiveObject(group);
+          if (onToolChange) onToolChange('select');
         }
 
         canvas.renderAll();
@@ -564,7 +700,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       canvas.off('mouse:move', handleMouseMove);
       canvas.off('mouse:up', handleMouseUp);
     };
-  }, [activeTool, isDrawing, onViewportChange, strokeColor, fillColor, strokeWidth]);
+  }, [activeTool, isDrawing, isPanning, onViewportChange, strokeColor, fillColor, strokeWidth, onToolChange, onContextMenu]);
 
   // Zoom with mouse wheel
   useEffect(() => {
@@ -575,10 +711,10 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       const delta = opt.e.deltaY;
       let zoom = canvas.getZoom();
       zoom *= 0.999 ** delta;
-      
+
       if (zoom > 4) zoom = 4;
       if (zoom < 0.1) zoom = 0.1;
-      
+
       canvas.zoomToPoint(new Point(opt.e.offsetX, opt.e.offsetY), zoom);
       opt.e.preventDefault();
       opt.e.stopPropagation();
@@ -633,7 +769,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       if (state) {
         canvas.loadFromJSON(JSON.parse(state)).then(() => {
           canvas.renderAll();
-          onObjectsChange(canvas.getObjects());
+          onObjectsChange(canvas.getObjects(), 'transform');
         });
       }
     },
@@ -644,7 +780,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       if (state) {
         canvas.loadFromJSON(JSON.parse(state)).then(() => {
           canvas.renderAll();
-          onObjectsChange(canvas.getObjects());
+          onObjectsChange(canvas.getObjects(), 'transform');
         });
       }
     },
@@ -661,7 +797,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
       if (!canvas) return;
       const activeObjects = canvas.getActiveObjects();
       if (activeObjects.length === 0) return;
-      
+
       canvas.discardActiveObject();
       activeObjects.forEach(obj => {
         obj.clone().then((cloned: FabricObject) => {
@@ -692,7 +828,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     paste: () => {
       const canvas = fabricRef.current;
       if (!canvas || clipboardRef.current.length === 0) return;
-      
+
       clipboardRef.current.forEach(obj => {
         obj.clone().then((cloned: FabricObject) => {
           cloned.set({
@@ -726,7 +862,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     addImage: (url: string) => {
       const canvas = fabricRef.current;
       if (!canvas) return;
-      
+
       FabricImage.fromURL(url).then((img) => {
         img.scaleToWidth(300);
         img.set({
@@ -741,7 +877,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     exportPNG: () => {
       const canvas = fabricRef.current;
       if (!canvas) return;
-      
+
       const dataURL = canvas.toDataURL({ format: 'png', multiplier: 2 });
       const link = document.createElement('a');
       link.download = 'whiteboard.png';
@@ -752,7 +888,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     exportSVG: () => {
       const canvas = fabricRef.current;
       if (!canvas) return;
-      
+
       const svg = canvas.toSVG();
       const blob = new Blob([svg], { type: 'image/svg+xml' });
       const url = URL.createObjectURL(blob);
@@ -766,7 +902,7 @@ export const WhiteboardCanvas = forwardRef<WhiteboardCanvasRef, WhiteboardCanvas
     exportJSON: () => {
       const canvas = fabricRef.current;
       if (!canvas) return;
-      
+
       const json = JSON.stringify(canvas.toJSON(), null, 2);
       const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob);

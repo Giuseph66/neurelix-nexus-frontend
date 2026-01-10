@@ -38,6 +38,8 @@ export interface Whiteboard {
     zoom: number;
   };
   settings: Record<string, unknown>;
+  canvas_snapshot?: Record<string, unknown> | null;
+  snapshot_version?: number;
   created_at: string;
   updated_at: string;
 }

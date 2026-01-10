@@ -67,6 +67,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     if (data) {
       setProfile(data as Profile);
+    } else {
+      // Fallback: criar perfil se não existir
+      // Isso pode acontecer se o trigger não funcionou ou para usuários antigos
+      const { data: userData } = await supabase.auth.getUser();
+      if (userData?.user) {
+        const { error: createError } = await supabase
+          .from("profiles")
+          .insert({
+            user_id: userId,
+            full_name: userData.user.user_metadata?.full_name || 
+                       userData.user.email?.split("@")[0] || 
+                       "Usuário",
+          })
+          .select()
+          .single();
+
+        if (createError) {
+          console.error("Error creating profile fallback:", createError);
+        } else {
+          // Recarregar perfil após criar
+          const { data: newProfile } = await supabase
+            .from("profiles")
+            .select("*")
+            .eq("user_id", userId)
+            .maybeSingle();
+          
+          if (newProfile) {
+            setProfile(newProfile as Profile);
+          }
+        }
+      }
     }
   }
 

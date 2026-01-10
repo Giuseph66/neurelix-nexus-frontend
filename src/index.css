@@ -137,3 +137,59 @@
     background-color: hsl(var(--muted-foreground) / 0.5);
   }
 }
+
+/* tldraw theme overrides - seguindo paleta Neurelix Nexus (Black & White) */
+.tl-container {
+  /* Background - usando background do sistema */
+  --color-background: hsl(var(--background)) !important;
+  
+  /* Panels - usando card do sistema */
+  --color-panel: hsl(var(--card)) !important;
+  --color-panel-contrast: hsl(var(--accent)) !important;
+  
+  /* Low contrast elements - usando muted do sistema */
+  --color-low: hsl(var(--muted)) !important;
+  --color-low-border: hsl(var(--border)) !important;
+  --color-culled: hsl(var(--muted)) !important;
+  
+  /* Muted overlays - usando foreground com transparência */
+  --color-muted-none: transparent !important;
+  --color-muted-0: hsla(var(--foreground) / 0.05) !important;
+  --color-muted-1: hsla(var(--foreground) / 0.1) !important;
+  --color-muted-2: hsla(var(--foreground) / 0.2) !important;
+  
+  /* Text colors - usando foreground do sistema */
+  --color-hint: hsl(var(--muted-foreground)) !important;
+  --color-text: hsl(var(--foreground)) !important;
+  --color-text-0: hsla(var(--foreground) / 0.8) !important;
+  --color-text-1: hsla(var(--foreground) / 0.9) !important;
+  --color-text-2: hsl(var(--foreground)) !important;
+  --color-text-3: hsl(var(--foreground)) !important;
+  
+  /* Primary/Selected - usando primary do sistema */
+  --color-primary: hsl(var(--primary)) !important;
+  --color-selected: hsl(var(--primary)) !important;
+  --color-selected-contrast: hsl(var(--primary-foreground)) !important;
+  --color-selection-stroke: hsl(var(--primary)) !important;
+  --color-selection-fill: hsla(var(--primary) / 0.15) !important;
+  
+  /* Warning - usando warning do sistema */
+  --color-warn: hsl(var(--warning)) !important;
+  
+  /* Shadows - usando sombras sutis com cores do sistema */
+  --shadow-2: 0px 1px 2px rgba(0, 0, 0, 0.4), 0px 1px 3px rgba(0, 0, 0, 0.3) !important;
+  --shadow-3: 0px 1px 3px rgba(0, 0, 0, 0.5), 0px 2px 6px rgba(0, 0, 0, 0.4), inset 0px 0px 0px 1px hsl(var(--border)) !important;
+  --shadow-4: 0px 1px 3px rgba(0, 0, 0, 0.5), 0px 2px 12px rgba(0, 0, 0, 0.5), inset 0px 0px 0px 1px hsl(var(--border)) !important;
+}
+
+/* Background do canvas do tldraw - usar background do sistema */
+.tl-container .tl-canvas {
+  background-color: hsl(var(--background)) !important;
+}
+
+/* Ocultar toggle de tema do tldraw (forçar dark mode) */
+.tl-container [data-testid="style.dark-mode-toggle"],
+.tl-container button[title*="Dark mode"],
+.tl-container button[title*="Light mode"] {
+  display: none !important;
+}

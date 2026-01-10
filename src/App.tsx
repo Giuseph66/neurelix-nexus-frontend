@@ -7,6 +7,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "next-themes";
 
 import Auth from "./pages/Auth";
+import AcceptInvite from "./pages/AcceptInvite";
 import Projects from "./pages/Projects";
 import { ProjectLayout } from "./components/layout/ProjectLayout";
 import Dashboard from "./pages/project/Dashboard";
@@ -30,6 +31,7 @@ const App = () => (
             <Routes>
               <Route path="/" element={<Navigate to="/projects" replace />} />
               <Route path="/auth" element={<Auth />} />
+              <Route path="/auth/accept-invite" element={<AcceptInvite />} />
               <Route path="/projects" element={<Projects />} />
 
               {/* Project routes with layout */}

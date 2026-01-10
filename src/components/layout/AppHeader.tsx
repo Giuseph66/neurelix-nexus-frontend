@@ -1,4 +1,4 @@
-import { useParams } from "react-router-dom";
+import { useParams, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
 import { SidebarTrigger } from "@/components/ui/sidebar";
@@ -19,6 +19,10 @@ interface AppHeaderProps {
 
 export function AppHeader({ pageTitle }: AppHeaderProps) {
   const { projectId } = useParams();
+  const location = useLocation();
+  
+  // Verificar se estamos na página do whiteboard
+  const isWhiteboardPage = location.pathname.includes('/whiteboard');
 
   const { data: project } = useQuery({
     queryKey: ["project", projectId],
@@ -86,8 +90,12 @@ export function AppHeader({ pageTitle }: AppHeaderProps) {
 
   return (
     <header className="sticky top-0 z-10 flex h-12 shrink-0 items-center gap-2 border-b bg-background px-4">
-      <SidebarTrigger className="-ml-1" />
-      <Separator orientation="vertical" className="mr-2 h-4" />
+      {!isWhiteboardPage && (
+        <>
+          <SidebarTrigger className="-ml-1" />
+          <Separator orientation="vertical" className="mr-2 h-4" />
+        </>
+      )}
 
       <Breadcrumb className="flex-1">
         <BreadcrumbList>

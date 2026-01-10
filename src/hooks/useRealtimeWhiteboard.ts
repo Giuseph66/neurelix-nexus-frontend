@@ -1,22 +1,105 @@
 import { useEffect, useCallback, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
-import { FabricObject, Canvas as FabricCanvas } from "fabric";
-import { Json } from "@/integrations/supabase/types";
+import { Canvas as FabricCanvas } from "fabric";
 import { toast } from "sonner";
 
 interface UseRealtimeWhiteboardOptions {
   whiteboardId: string | null;
-  canvas: FabricCanvas | null;
+  getCanvas: () => FabricCanvas | null;
   enabled: boolean;
+  onRemoteChange?: () => void;
 }
 
-export function useRealtimeWhiteboard({ 
-  whiteboardId, 
-  canvas, 
-  enabled 
+export function useRealtimeWhiteboard({
+  whiteboardId,
+  getCanvas,
+  enabled,
+  onRemoteChange,
 }: UseRealtimeWhiteboardOptions) {
-  const isLocalChangeRef = useRef(false);
   const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const lastAppliedSnapshotKeyRef = useRef<string>('');
+  const lastAppliedVersionRef = useRef<number>(-1);
+
+  const applySnapshotToCanvas = useCallback((
+    snapshot: any,
+    version: number,
+    source: 'db_load' | 'realtime'
+  ) => {
+    const canvas = getCanvas();
+    if (!canvas) return;
+
+    const snapshotKey = JSON.stringify(snapshot ?? {});
+    if (snapshotKey === lastAppliedSnapshotKeyRef.current && version <= lastAppliedVersionRef.current) {
+      return;
+    }
+
+    // Preserve viewport (pan/zoom) locally when applying remote snapshot
+    const currentViewport = canvas.viewportTransform
+      ? [...canvas.viewportTransform] as number[]
+      : null;
+
+    const canvasAny = canvas as any;
+    canvasAny.__suppressOnObjectsChange = true;
+
+    const jsonToLoad = snapshot && typeof snapshot === 'object'
+      ? snapshot
+      : { objects: [], background: "#000000" };
+
+    canvas.loadFromJSON(jsonToLoad, () => {
+      if (currentViewport) {
+        canvas.setViewportTransform(currentViewport as any);
+      }
+      canvas.backgroundColor = "#000000";
+      canvas.renderAll();
+      canvasAny.__suppressOnObjectsChange = false;
+    });
+
+    lastAppliedSnapshotKeyRef.current = snapshotKey;
+    lastAppliedVersionRef.current = typeof version === 'number' ? version : lastAppliedVersionRef.current;
+
+    if (onRemoteChange && source === 'realtime') {
+      onRemoteChange();
+    }
+  }, [getCanvas, onRemoteChange]);
+
+  // Load snapshot from database
+  const loadSnapshotFromDB = useCallback(async () => {
+    const currentCanvas = getCanvas();
+    if (!whiteboardId || !currentCanvas) return;
+
+    const startTime = Date.now();
+
+    try {
+      const { data, error } = await supabase
+        .from('whiteboards')
+        .select('id, canvas_snapshot, snapshot_version')
+        .eq('id', whiteboardId)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      console.log('[Realtime] Loading snapshot from DB', {
+        whiteboardId,
+        hasSnapshot: !!(data as any)?.canvas_snapshot,
+        version: (data as any)?.snapshot_version,
+      });
+
+      const duration = Date.now() - startTime;
+      console.log('[Realtime] Canvas snapshot sync from DB completed', {
+        whiteboardId,
+        durationMs: duration,
+      });
+
+      applySnapshotToCanvas(
+        (data as any)?.canvas_snapshot ?? null,
+        typeof (data as any)?.snapshot_version === 'number' ? (data as any).snapshot_version : -1,
+        'db_load'
+      );
+    } catch (error) {
+      console.error('[Realtime] Error loading snapshot:', error);
+    }
+  }, [whiteboardId, getCanvas, applySnapshotToCanvas]);
 
   // Subscribe to realtime changes
   useEffect(() => {
@@ -25,40 +108,54 @@ export function useRealtimeWhiteboard({
     console.log('[Realtime] Subscribing to whiteboard:', whiteboardId);
 
     const channel = supabase
-      .channel(`whiteboard-${whiteboardId}`)
+      .channel(`whiteboard-${whiteboardId}`, {
+        config: {
+          broadcast: { self: false },
+        },
+      })
       .on(
         'postgres_changes',
         {
-          event: '*',
+          event: 'UPDATE',
           schema: 'public',
-          table: 'whiteboard_objects',
-          filter: `whiteboard_id=eq.${whiteboardId}`,
+          table: 'whiteboards',
+          filter: `id=eq.${whiteboardId}`,
         },
         (payload) => {
-          console.log('[Realtime] Received change:', payload.eventType);
-          
-          // Skip if this was a local change
-          if (isLocalChangeRef.current) {
-            console.log('[Realtime] Skipping local change');
-            return;
-          }
+          console.log('[Realtime] Received snapshot change', {
+            whiteboardId,
+            eventType: payload.eventType,
+          });
 
-          // Debounce to batch rapid changes
-          if (syncTimeoutRef.current) {
-            clearTimeout(syncTimeoutRef.current);
-          }
+          const next = (payload as any).new;
+          if (!next) return;
 
+          // Debounce to batch rapid updates
+          if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
           syncTimeoutRef.current = setTimeout(() => {
-            loadObjectsFromDB();
-          }, 300);
+            applySnapshotToCanvas(
+              next.canvas_snapshot ?? null,
+              typeof next.snapshot_version === 'number' ? next.snapshot_version : -1,
+              'realtime'
+            );
+          }, 80);
         }
       )
       .subscribe((status) => {
         console.log('[Realtime] Subscription status:', status);
         if (status === 'SUBSCRIBED') {
           toast.success('Colaboração em tempo real ativada');
+          // Sync initial state on subscribe
+          loadSnapshotFromDB();
         }
       });
+
+    // Helpful: log realtime channel errors
+    channel.on('system', { event: '*' }, (payload) => {
+      console.log('[Realtime] System event', payload);
+    });
+
+    channelRef.current = channel;
 
     return () => {
       console.log('[Realtime] Unsubscribing from whiteboard');
@@ -66,92 +163,11 @@ export function useRealtimeWhiteboard({
       if (syncTimeoutRef.current) {
         clearTimeout(syncTimeoutRef.current);
       }
+      channelRef.current = null;
     };
-  }, [whiteboardId, enabled]);
-
-  // Load objects from database
-  const loadObjectsFromDB = useCallback(async () => {
-    if (!whiteboardId || !canvas) return;
-
-    try {
-      const { data, error } = await supabase
-        .from('whiteboard_objects')
-        .select('*')
-        .eq('whiteboard_id', whiteboardId)
-        .order('z_index', { ascending: true });
-
-      if (error) throw error;
-
-      console.log('[Realtime] Loading', data?.length || 0, 'objects from DB');
-
-      // Clear and reload canvas
-      canvas.clear();
-      canvas.backgroundColor = "#1e293b";
-
-      if (data && data.length > 0) {
-        const jsonObjects = data.map(obj => obj.properties);
-        
-        // Use loadFromJSON to restore objects
-        await canvas.loadFromJSON({ 
-          objects: jsonObjects,
-          background: "#1e293b"
-        }, () => {
-          canvas.renderAll();
-        });
-      } else {
-        canvas.renderAll();
-      }
-    } catch (error) {
-      console.error('[Realtime] Error loading objects:', error);
-    }
-  }, [whiteboardId, canvas]);
-
-  // Save objects to database with local flag
-  const saveObjectsRealtime = useCallback(async (objects: FabricObject[]) => {
-    if (!whiteboardId) return;
-
-    isLocalChangeRef.current = true;
-
-    try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      // Delete existing objects
-      await supabase
-        .from('whiteboard_objects')
-        .delete()
-        .eq('whiteboard_id', whiteboardId);
-
-      if (objects.length === 0) {
-        return;
-      }
-
-      // Insert new objects
-      const objectsToInsert = objects.map((obj, index) => ({
-        whiteboard_id: whiteboardId,
-        type: obj.type || 'unknown',
-        properties: obj.toObject() as unknown as Json,
-        z_index: index,
-        created_by: user.id,
-      }));
-
-      const { error } = await supabase
-        .from('whiteboard_objects')
-        .insert(objectsToInsert);
-
-      if (error) throw error;
-    } catch (error) {
-      console.error('[Realtime] Error saving objects:', error);
-    } finally {
-      // Reset flag after a short delay to allow the change to propagate
-      setTimeout(() => {
-        isLocalChangeRef.current = false;
-      }, 500);
-    }
-  }, [whiteboardId]);
+  }, [whiteboardId, enabled, loadSnapshotFromDB, applySnapshotToCanvas]);
 
   return {
-    saveObjectsRealtime,
-    loadObjectsFromDB,
+    loadSnapshotFromDB,
   };
 }

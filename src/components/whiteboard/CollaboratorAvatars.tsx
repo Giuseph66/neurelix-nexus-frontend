@@ -5,11 +5,13 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 interface CollaboratorAvatarsProps {
   collaborators: Collaborator[];
   currentUserColor: string;
+  hasRemoteActivity?: boolean;
 }
 
 export function CollaboratorAvatars({ 
   collaborators, 
-  currentUserColor 
+  currentUserColor,
+  hasRemoteActivity = false,
 }: CollaboratorAvatarsProps) {
   return (
     <TooltipProvider>
@@ -18,7 +20,7 @@ export function CollaboratorAvatars({
         <Tooltip>
           <TooltipTrigger asChild>
             <div 
-              className="w-3 h-3 rounded-full ring-2 ring-background"
+              className={`w-3 h-3 rounded-full ring-2 ring-background ${hasRemoteActivity ? 'animate-pulse' : ''}`}
               style={{ backgroundColor: currentUserColor }}
             />
           </TooltipTrigger>
