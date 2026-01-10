@@ -2,34 +2,28 @@ import { useState, useCallback, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { Plus, MoreVertical, Trash2, Loader2, MessageCircle, GitBranch } from "lucide-react";
+import { Plus, MoreVertical, Trash2, Loader2, MessageCircle, GitBranch, ChevronLeft, ChevronRight, Pencil, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu";
 import { TooltipProvider, Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
-import { WhiteboardCanvas, WhiteboardCanvasRef } from "@/components/whiteboard/WhiteboardCanvas";
-import { WhiteboardToolbar } from "@/components/whiteboard/WhiteboardToolbar";
-import { PropertiesPanel } from "@/components/whiteboard/PropertiesPanel";
-import { CollaboratorCursors } from "@/components/whiteboard/CollaboratorCursors";
-import { CollaboratorAvatars } from "@/components/whiteboard/CollaboratorAvatars";
-import { BranchMenu } from "@/components/whiteboard/BranchMenu";
+import { useSidebar } from "@/components/ui/sidebar";
+import { TldrawWhiteboard } from "@/components/whiteboard/TldrawWhiteboard";
+//import { WhiteboardToolbar } from "@/components/whiteboard/WhiteboardToolbar";
+import { WhiteboardHeader } from "@/components/whiteboard/WhiteboardHeader";
 import { CommentMarker } from "@/components/whiteboard/CommentMarker";
 import { CommentThread } from "@/components/whiteboard/CommentThread";
-import { NotificationBell } from "@/components/whiteboard/NotificationBell";
-import { CanvasContextMenu } from "@/components/whiteboard/CanvasContextMenu";
 import { BearAssistant } from "@/components/whiteboard/BearAssistant";
 import { BearCursor } from "@/components/whiteboard/BearCursor";
-import { ToolType, CanvasViewport } from "@/components/whiteboard/types";
+import { ToolType } from "@/components/whiteboard/types";
+import { Editor, createShapeId } from "tldraw";
 import { useWhiteboard } from "@/hooks/useWhiteboard";
-import { useWhiteboardKeyboard } from "@/hooks/useWhiteboardKeyboard";
-import { useRealtimeWhiteboard } from "@/hooks/useRealtimeWhiteboard";
 import { useWhiteboardPresence } from "@/hooks/useWhiteboardPresence";
 import { useWhiteboardBranches } from "@/hooks/useWhiteboardBranches";
 import { useWhiteboardComments } from "@/hooks/useWhiteboardComments";
 import { useMentions } from "@/hooks/useMentions";
-import { FabricObject, IText, Rect, Canvas as FabricCanvas } from "fabric";
-import { Badge } from "@/components/ui/badge";
+import { toast } from "sonner";
 import { usePageTitle } from "@/hooks/usePageTitle";
 
 export default function Whiteboard() {
@@ -42,33 +36,35 @@ export default function Whiteboard() {
   const [strokeColor, setStrokeColor] = useState("#f8fafc");
   const [fillColor, setFillColor] = useState("transparent");
   const [strokeWidth, setStrokeWidth] = useState(2);
-  const [canUndo, setCanUndo] = useState(false);
-  const [canRedo, setCanRedo] = useState(false);
-  const [selectedObject, setSelectedObject] = useState<FabricObject | null>(null);
-  const [canvasOffset, setCanvasOffset] = useState({ x: 0, y: 0 });
   const [branches, setBranches] = useState<any[]>([]);
-  const [activeCommentPosition, setActiveCommentPosition] = useState<{x: number, y: number} | null>(null);
+  const [activeCommentPosition, setActiveCommentPosition] = useState<{ x: number, y: number } | null>(null);
   const [commentMode, setCommentMode] = useState(false);
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const canvasRef = useRef<WhiteboardCanvasRef>(null);
+  const [cursorPosition, setCursorPosition] = useState({ x: 0, y: 0 });
+  const [hasRemoteActivity, setHasRemoteActivity] = useState(false);
+  const [tldrawEditor, setTldrawEditor] = useState<Editor | null>(null);
+  const [isBoardsDrawerOpen, setIsBoardsDrawerOpen] = useState(true);
+  const [editingBoardId, setEditingBoardId] = useState<string | null>(null);
+  const [editingBoardName, setEditingBoardName] = useState('');
   const canvasContainerRef = useRef<HTMLDivElement>(null);
 
   const {
     whiteboards,
     whiteboard,
-    objects,
     loading,
     saving,
     createWhiteboard,
     deleteWhiteboard,
+    renameWhiteboard,
     saveViewport,
-    saveObjects,
+    saveSnapshot,
     fetchWhiteboards,
-  } = useWhiteboard({ 
-    projectId: projectId || '', 
-    whiteboardId: selectedWhiteboardId || undefined 
+  } = useWhiteboard({
+    projectId: projectId || '',
+    whiteboardId: selectedWhiteboardId || undefined
   });
+  
+  // Não minimizar automaticamente - será minimizado quando o usuário clicar no canvas
 
   const { data: project } = useQuery({
     queryKey: ['project', projectId],
@@ -79,7 +75,7 @@ export default function Whiteboard() {
         .select('*')
         .eq('id', projectId)
         .maybeSingle();
-      
+
       if (error) throw error;
       return data;
     },
@@ -88,18 +84,30 @@ export default function Whiteboard() {
 
   usePageTitle("Quadro Branco", project?.name);
 
-  // Real-time collaboration - use a stable ref to prevent re-subscriptions
-  const canvasInstanceRef = useRef<FabricCanvas | null>(null);
+  // Minimizar sidebar quando o whiteboard estiver aberto
+  const { setOpen: setSidebarOpen } = useSidebar();
+  const sidebarWasOpenRef = useRef<boolean | null>(null);
   
   useEffect(() => {
-    canvasInstanceRef.current = canvasRef.current?.getCanvas() ?? null;
-  }, [selectedWhiteboardId, loading]);
-
-  const { saveObjectsRealtime } = useRealtimeWhiteboard({
-    whiteboardId: selectedWhiteboardId,
-    canvas: canvasInstanceRef.current,
-    enabled: !!selectedWhiteboardId && !loading,
-  });
+    // Ler estado atual do sidebar do cookie antes de minimizar
+    const cookieValue = document.cookie
+      .split('; ')
+      .find(row => row.startsWith('sidebar:state='))
+      ?.split('=')[1];
+    
+    const wasOpen = cookieValue === 'true';
+    sidebarWasOpenRef.current = wasOpen;
+    
+    // Minimizar o sidebar
+    setSidebarOpen(false);
+    
+    // Restaurar estado quando sair da página
+    return () => {
+      if (sidebarWasOpenRef.current) {
+        setSidebarOpen(true);
+      }
+    };
+  }, [setSidebarOpen]);
 
   // User presence
   const { collaborators, userColor, updateCursor, currentUserId } = useWhiteboardPresence({
@@ -117,10 +125,10 @@ export default function Whiteboard() {
   });
 
   // Comments
-  const { 
-    comments, 
-    createComment, 
-    deleteComment, 
+  const {
+    comments,
+    createComment,
+    deleteComment,
     toggleResolved,
     getCommentsForObject,
   } = useWhiteboardComments({
@@ -130,22 +138,6 @@ export default function Whiteboard() {
 
   // Notifications/Mentions
   const { mentions, unreadCount, markAsRead, markAllAsRead } = useMentions();
-
-  // Keyboard shortcuts
-  useWhiteboardKeyboard({
-    onToolChange: setActiveTool,
-    onUndo: () => canvasRef.current?.undo(),
-    onRedo: () => canvasRef.current?.redo(),
-    onDelete: () => canvasRef.current?.deleteSelected(),
-    onDuplicate: () => canvasRef.current?.duplicateSelected(),
-    onSelectAll: () => canvasRef.current?.selectAll(),
-    onCopy: () => canvasRef.current?.copy(),
-    onPaste: () => canvasRef.current?.paste(),
-    onZoomIn: () => canvasRef.current?.zoomIn(),
-    onZoomOut: () => canvasRef.current?.zoomOut(),
-    onZoomReset: () => canvasRef.current?.zoomReset(),
-    enabled: !!selectedWhiteboardId && !loading,
-  });
 
   // Load branches when whiteboard changes
   useEffect(() => {
@@ -172,155 +164,240 @@ export default function Whiteboard() {
     }
   };
 
-  const handleObjectsChange = useCallback((objects: FabricObject[]) => {
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = setTimeout(() => {
-      saveObjects(objects);
-      // Only call realtime save if enabled
-      if (selectedWhiteboardId && !loading) {
-        saveObjectsRealtime(objects);
-      }
-    }, 1000);
-  }, [saveObjects, saveObjectsRealtime, selectedWhiteboardId, loading]);
-
-  const handleViewportChange = useCallback((viewport: CanvasViewport) => {
-    setZoom(viewport.zoom);
-    setCanvasOffset({ x: viewport.x * viewport.zoom, y: viewport.y * viewport.zoom });
-    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
-    saveTimeoutRef.current = setTimeout(() => saveViewport(viewport), 500);
-  }, [saveViewport]);
-
-  // Handle cursor movement for presence
-  const handleMouseMove = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    const canvas = canvasRef.current?.getCanvas();
-    if (!canvas) return;
-    
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    // Convert to canvas coordinates
-    const vpt = canvas.viewportTransform;
-    if (vpt) {
-      const canvasX = (x - vpt[4]) / canvas.getZoom();
-      const canvasY = (y - vpt[5]) / canvas.getZoom();
-      updateCursor(canvasX, canvasY);
+  const handleRenameBoard = async (id: string) => {
+    if (!editingBoardName.trim()) {
+      setEditingBoardId(null);
+      setEditingBoardName('');
+      return;
     }
-  }, [updateCursor]);
-
-  const handleMouseLeave = useCallback(() => {
-    updateCursor(null, null);
-  }, [updateCursor]);
-
-  // Handle canvas click for comment mode
-  const handleCanvasClick = useCallback((e: React.MouseEvent<HTMLDivElement>) => {
-    if (!commentMode) return;
-    
-    const canvas = canvasRef.current?.getCanvas();
-    if (!canvas) return;
-    
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    
-    const vpt = canvas.viewportTransform;
-    if (vpt) {
-      const canvasX = (x - vpt[4]) / canvas.getZoom();
-      const canvasY = (y - vpt[5]) / canvas.getZoom();
-      setActiveCommentPosition({ x: canvasX, y: canvasY });
-      setCommentMode(false);
-    }
-  }, [commentMode]);
-
-  const handlePropertiesUpdate = () => {
-    canvasRef.current?.renderAll();
-    const canvas = canvasRef.current?.getCanvas();
-    if (canvas) {
-      handleObjectsChange(canvas.getObjects());
-    }
+    await renameWhiteboard(id, editingBoardName.trim());
+    setEditingBoardId(null);
+    setEditingBoardName('');
   };
 
-  const handleToggleLock = useCallback(() => {
-    const canvas = canvasRef.current?.getCanvas();
-    const obj = canvas?.getActiveObject();
-    if (!obj) return;
-    const isLocked = obj.get('lockMovementX');
-    obj.set({
-      lockMovementX: !isLocked,
-      lockMovementY: !isLocked,
-      lockScalingX: !isLocked,
-      lockScalingY: !isLocked,
-      lockRotation: !isLocked,
-    });
-    canvas?.renderAll();
-    handleObjectsChange(canvas?.getObjects() || []);
-  }, [handleObjectsChange]);
+  const remoteActivityTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const handleFlipHorizontal = useCallback(() => {
-    const canvas = canvasRef.current?.getCanvas();
-    const obj = canvas?.getActiveObject();
-    if (!obj) return;
-    obj.set('flipX', !obj.flipX);
-    canvas?.renderAll();
-    handleObjectsChange(canvas?.getObjects() || []);
-  }, [handleObjectsChange]);
+  const handleRemoteActivity = useCallback(() => {
+    setHasRemoteActivity(true);
+    if (remoteActivityTimeoutRef.current) {
+      clearTimeout(remoteActivityTimeoutRef.current);
+    }
+    remoteActivityTimeoutRef.current = setTimeout(() => {
+      setHasRemoteActivity(false);
+    }, 3000);
+  }, []);
 
-  const handleFlipVertical = useCallback(() => {
-    const canvas = canvasRef.current?.getCanvas();
-    const obj = canvas?.getActiveObject();
-    if (!obj) return;
-    obj.set('flipY', !obj.flipY);
-    canvas?.renderAll();
-    handleObjectsChange(canvas?.getObjects() || []);
-  }, [handleObjectsChange]);
+  // Handle cursor movement for presence (tldraw)
+  useEffect(() => {
+    if (!tldrawEditor) return;
 
-  // Handle creating elements from AI assistant
-  const handleCreateElementsFromAI = useCallback((elements: any[]) => {
-    const canvas = canvasRef.current?.getCanvas();
-    if (!canvas) return;
+    const updateCursorPosition = () => {
+      const viewportBounds = tldrawEditor.getViewportScreenBounds();
+      const centerScreen = {
+        x: viewportBounds.width / 2,
+        y: viewportBounds.height / 2,
+      };
+      const centerPage = tldrawEditor.screenToPage(centerScreen);
+      setCursorPosition({
+        x: Math.round(centerPage.x),
+        y: Math.round(centerPage.y),
+      });
+    };
 
-    let offsetX = 100;
-    let offsetY = 100;
+    const unsubscribe = tldrawEditor.store.listen(() => {
+      updateCursorPosition();
+      // Cursor tracking is handled by tldraw's presence system
+      // We'll update cursor position based on viewport center for now
+    }, { scope: 'session' });
 
-    elements.forEach((el, index) => {
-      if (el.type === 'postit') {
-        const postit = new Rect({
-          left: offsetX + (index * 180),
-          top: offsetY,
-          width: 150,
-          height: 150,
-          fill: el.color === 'yellow' ? '#fef08a' : el.color === 'blue' ? '#93c5fd' : el.color === 'green' ? '#86efac' : el.color === 'pink' ? '#f9a8d4' : '#fef08a',
-          stroke: '#eab308',
-          strokeWidth: 1,
-          rx: 4,
-          ry: 4,
-        });
-        canvas.add(postit);
+    return () => unsubscribe();
+  }, [tldrawEditor, updateCursor]);
 
-        const text = new IText(el.text || 'Nota', {
-          left: offsetX + (index * 180) + 10,
-          top: offsetY + 10,
-          fontSize: 12,
-          fill: '#1e293b',
-          fontFamily: 'Inter, sans-serif',
-          width: 130,
-        });
-        canvas.add(text);
-      } else if (el.type === 'text') {
-        const text = new IText(el.content || 'Texto', {
-          left: offsetX + (index * 200),
-          top: offsetY + 200,
-          fontSize: 16,
-          fill: '#f8fafc',
-          fontFamily: 'Inter, sans-serif',
-        });
-        canvas.add(text);
-      }
+  // Handle creating elements from AI assistant (tldraw)
+  const handleCreateElementsFromAI = useCallback((data: any) => {
+    if (!tldrawEditor) return;
+
+    // Check if it's the new graph format or old list format
+    const isGraph = data.type === 'graph' && Array.isArray(data.nodes);
+    const nodes = isGraph ? data.nodes : (data.items || data); // Fallback
+    const edges = isGraph ? data.edges : [];
+
+    // Calculate sizes first
+    const processedNodes = nodes.map((node: any) => {
+      const textLength = (node.text || node.content || "").length;
+      const baseWidth = 200;
+      const lines = Math.ceil(textLength / 25);
+      const minHeight = 100;
+      const calculatedHeight = Math.max(minHeight, lines * 24 + 40);
+
+      return {
+        ...node,
+        width: baseWidth,
+        height: calculatedHeight,
+        id: node.id || createShapeId()
+      };
     });
 
-    canvas.renderAll();
-    handleObjectsChange(canvas.getObjects());
-  }, [handleObjectsChange]);
+    // Simple Layout Logic - level-based layout
+    const nodeMap = new Map();
+    processedNodes.forEach((n: any) => nodeMap.set(n.id, n));
+
+    const levels = new Map();
+    const visited = new Set();
+    const targets = new Set(edges.map((e: any) => e.to));
+    const roots = processedNodes.filter((n: any) => !targets.has(n.id));
+    const startNodes = roots.length > 0 ? roots : [processedNodes[0]];
+
+    // BFS for levels
+    const queue = startNodes.map((n: any) => ({ id: n.id, level: 0 }));
+    let maxLevel = 0;
+
+    while (queue.length > 0) {
+      const { id, level } = queue.shift()!;
+      if (visited.has(id)) continue;
+      visited.add(id);
+      levels.set(id, level);
+      maxLevel = Math.max(maxLevel, level);
+
+      edges.filter((e: any) => e.from === id).forEach((e: any) => {
+        queue.push({ id: e.to, level: level + 1 });
+      });
+    }
+
+    // Assign positions
+    const levelGroups: any[][] = Array(maxLevel + 1).fill(null).map(() => []);
+    processedNodes.forEach((n: any) => {
+      const level = levels.get(n.id) ?? 0;
+      levelGroups[level].push(n);
+    });
+
+    let startX = 100;
+    let startY = 100;
+    const X_GAP = 250;
+    const Y_GAP = 50;
+
+    levelGroups.forEach((group, colIndex) => {
+      let currentY = startY;
+      group.forEach((node) => {
+        node.x = startX + (colIndex * X_GAP);
+        node.y = currentY;
+        currentY += node.height + Y_GAP;
+      });
+    });
+
+    // Create tldraw shapes
+    tldrawEditor.batch(() => {
+      processedNodes.forEach((el: any) => {
+        const shapeId = createShapeId();
+        const fillColor = el.type === 'postit' 
+          ? (el.color === 'yellow' ? '#fef08a' : el.color === 'blue' ? '#93c5fd' : el.color === 'green' ? '#86efac' : el.color === 'pink' ? '#f9a8d4' : '#fef08a')
+          : '#334155';
+        const strokeColor = el.type === 'postit' ? '#eab308' : '#94a3b8';
+
+        if (el.type === 'diamond') {
+          // Diamond shape (rotated rectangle)
+          const size = Math.max(el.width, el.height) + 40;
+          tldrawEditor.createShape({
+            id: shapeId,
+            type: 'geo',
+            x: el.x,
+            y: el.y,
+            props: {
+              w: size,
+              h: size,
+              geo: 'diamond',
+              fill: 'solid',
+              color: 'grey',
+              dash: 'draw',
+              size: 'm',
+            },
+          });
+        } else {
+          // Rectangle shape
+          tldrawEditor.createShape({
+            id: shapeId,
+            type: 'geo',
+            x: el.x,
+            y: el.y,
+            props: {
+              w: el.width,
+              h: el.height,
+              geo: 'rectangle',
+              fill: 'solid',
+              color: 'grey',
+              dash: 'draw',
+              size: 'm',
+            },
+          });
+        }
+
+        // Add text as separate text shape
+        if (el.text || el.content) {
+          const textId = createShapeId();
+          tldrawEditor.createShape({
+            id: textId,
+            type: 'text',
+            x: el.x,
+            y: el.y,
+            props: {
+              text: el.text || el.content || 'Texto',
+              w: el.width - 20,
+              h: el.height - 20,
+              color: el.type === 'postit' ? 'black' : 'white',
+              size: 'm',
+              font: 'draw',
+              align: 'middle',
+              autoSize: false,
+            },
+          });
+        }
+
+        nodeMap.set(el.id, { shapeId, center: { x: el.x + el.width / 2, y: el.y + el.height / 2 } });
+      });
+
+      // Create arrows
+      edges.forEach((edge: any) => {
+        const from = nodeMap.get(edge.from);
+        const to = nodeMap.get(edge.to);
+
+        if (from && to) {
+          const start = from.center;
+          const end = to.center;
+          const angle = Math.atan2(end.y - start.y, end.x - start.x);
+          const gap = 10;
+          const startOffset = 50 + gap;
+          const endOffset = 50 + gap;
+
+          const realStart = {
+            x: start.x + Math.cos(angle) * startOffset,
+            y: start.y + Math.sin(angle) * startOffset
+          };
+
+          const realEnd = {
+            x: end.x - Math.cos(angle) * endOffset,
+            y: end.y - Math.sin(angle) * endOffset
+          };
+
+          tldrawEditor.createShape({
+            id: createShapeId(),
+            type: 'arrow',
+            x: realStart.x,
+            y: realStart.y,
+            props: {
+              start: { x: 0, y: 0 },
+              end: { x: realEnd.x - realStart.x, y: realEnd.y - realStart.y },
+              arrowheadStart: 'none',
+              arrowheadEnd: 'arrow',
+              color: 'grey',
+              size: 'm',
+            },
+          });
+        }
+      });
+    });
+
+    toast.success(`${processedNodes.length} elementos criados pelo assistente`);
+  }, [tldrawEditor]);
 
   // Group comments by position (for markers)
   const commentMarkers = comments
@@ -347,9 +424,9 @@ export default function Whiteboard() {
           <DialogContent>
             <DialogHeader><DialogTitle>Novo Quadro Branco</DialogTitle></DialogHeader>
             <div className="flex gap-2">
-              <Input 
-                placeholder="Nome do quadro" 
-                value={newBoardName} 
+              <Input
+                placeholder="Nome do quadro"
+                value={newBoardName}
                 onChange={(e) => setNewBoardName(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && handleCreateWhiteboard()}
               />
@@ -365,64 +442,156 @@ export default function Whiteboard() {
     <TooltipProvider>
       <div className="flex h-full">
         {/* Sidebar com lista de quadros */}
-        <div className="w-56 border-r bg-muted/30 flex flex-col">
-          <div className="p-3 border-b flex items-center justify-between">
+        {isBoardsDrawerOpen && (
+        <div 
+          className="w-56 border-r bg-muted/30 flex flex-col transition-all duration-200 ease-in-out"
+        >
+          <div className="p-3 border-b flex items-center justify-between min-w-[224px]">
             <span className="font-medium text-sm">Quadros</span>
-            <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
-              <DialogTrigger asChild>
-                <Button variant="ghost" size="icon" className="h-7 w-7"><Plus className="h-4 w-4" /></Button>
-              </DialogTrigger>
-              <DialogContent>
-                <DialogHeader><DialogTitle>Novo Quadro</DialogTitle></DialogHeader>
-                <div className="flex gap-2">
-                  <Input 
-                    placeholder="Nome do quadro" 
-                    value={newBoardName} 
-                    onChange={(e) => setNewBoardName(e.target.value)}
-                    onKeyDown={(e) => e.key === 'Enter' && handleCreateWhiteboard()}
-                  />
-                  <Button onClick={handleCreateWhiteboard}>Criar</Button>
-                </div>
-              </DialogContent>
-            </Dialog>
+            <div className="flex items-center gap-1">
+              <Dialog open={isDialogOpen} onOpenChange={setIsDialogOpen}>
+                <DialogTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-7 w-7"><Plus className="h-4 w-4" /></Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader><DialogTitle>Novo Quadro</DialogTitle></DialogHeader>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Nome do quadro"
+                      value={newBoardName}
+                      onChange={(e) => setNewBoardName(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleCreateWhiteboard()}
+                    />
+                    <Button onClick={handleCreateWhiteboard}>Criar</Button>
+                  </div>
+                </DialogContent>
+              </Dialog>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-7 w-7"
+                    onClick={() => setIsBoardsDrawerOpen(false)}
+                  >
+                    <ChevronLeft className="h-4 w-4" />
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>Minimizar lista de quadros</p>
+                </TooltipContent>
+              </Tooltip>
+            </div>
           </div>
-          <div className="flex-1 overflow-auto p-2 space-y-1">
+          <div className="flex-1 overflow-auto p-2 space-y-1 min-w-[224px]">
             {whiteboards.map((wb) => (
-              <div 
+              <div
                 key={wb.id}
-                className={`group flex items-center justify-between px-2 py-1.5 rounded cursor-pointer text-sm ${
-                  selectedWhiteboardId === wb.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted'
-                }`}
-                onClick={() => setSelectedWhiteboardId(wb.id)}
+                className={`group flex items-center justify-between px-2 py-1.5 rounded cursor-pointer text-sm ${selectedWhiteboardId === wb.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted'
+                  }`}
+                onClick={() => {
+                  if (editingBoardId !== wb.id) {
+                    setSelectedWhiteboardId(wb.id);
+                    // Abrir drawer quando selecionar um quadro
+                    setIsBoardsDrawerOpen(true);
+                  }
+                }}
               >
-                <div className="flex items-center gap-1.5 truncate">
-                  {wb.parent_branch_id && <GitBranch className="h-3 w-3 flex-shrink-0" />}
-                  <span className="truncate">{wb.branch_name || wb.name}</span>
-                </div>
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
-                    <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100">
-                      <MoreVertical className="h-3 w-3" />
+                {editingBoardId === wb.id ? (
+                  <div className="flex items-center gap-1.5 flex-1" onClick={(e) => e.stopPropagation()}>
+                    <Input
+                      value={editingBoardName}
+                      onChange={(e) => setEditingBoardName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          handleRenameBoard(wb.id);
+                        } else if (e.key === 'Escape') {
+                          setEditingBoardId(null);
+                          setEditingBoardName('');
+                        }
+                      }}
+                      className="h-7 text-sm"
+                      autoFocus
+                    />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => handleRenameBoard(wb.id)}
+                    >
+                      <Check className="h-3 w-3" />
                     </Button>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent className="bg-popover">
-                    <DropdownMenuItem onClick={() => deleteWhiteboard(wb.id)}>
-                      <Trash2 className="h-4 w-4 mr-2" /> Excluir
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="h-6 w-6"
+                      onClick={() => {
+                        setEditingBoardId(null);
+                        setEditingBoardName('');
+                      }}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  </div>
+                ) : (
+                  <>
+                    <div className="flex items-center gap-1.5 truncate flex-1">
+                      {wb.parent_branch_id && <GitBranch className="h-3 w-3 flex-shrink-0" />}
+                      <span className="truncate">{wb.branch_name || wb.name}</span>
+                    </div>
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild onClick={(e) => e.stopPropagation()}>
+                        <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100">
+                          <MoreVertical className="h-3 w-3" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent className="bg-popover">
+                        <DropdownMenuItem 
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setEditingBoardId(wb.id);
+                            setEditingBoardName(wb.branch_name || wb.name);
+                          }}
+                        >
+                          <Pencil className="h-4 w-4 mr-2" /> Renomear
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => deleteWhiteboard(wb.id)}>
+                          <Trash2 className="h-4 w-4 mr-2" /> Excluir
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  </>
+                )}
               </div>
             ))}
           </div>
         </div>
+        )}
+        
+        {/* Botão para expandir drawer quando minimizado */}
+        {!isBoardsDrawerOpen && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button 
+                variant="ghost" 
+                size="icon" 
+                className="h-8 w-8 absolute left-0 top-1/2 -translate-y-1/2 z-10 bg-background/80 backdrop-blur-sm border-r border-t border-b rounded-r-md shadow-sm"
+                onClick={() => setIsBoardsDrawerOpen(true)}
+              >
+                <ChevronRight className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="right">
+              <p>Expandir lista de quadros</p>
+            </TooltipContent>
+          </Tooltip>
+        )}
 
         {/* Canvas principal */}
-        <div 
+        <div
           ref={canvasContainerRef}
-          className={`flex-1 relative ${commentMode ? 'cursor-crosshair' : ''}`}
-          onMouseMove={handleMouseMove}
-          onMouseLeave={handleMouseLeave}
-          onClick={handleCanvasClick}
+          className="flex-1 relative"
+          style={{ position: 'relative', width: '100%', height: '100%' }}
         >
           {loading ? (
             <div className="flex items-center justify-center h-full">
@@ -430,123 +599,94 @@ export default function Whiteboard() {
             </div>
           ) : (
             <>
-              <WhiteboardToolbar
-                activeTool={activeTool}
-                onToolChange={setActiveTool}
-                onUndo={() => canvasRef.current?.undo()}
-                onRedo={() => canvasRef.current?.redo()}
-                canUndo={canUndo}
-                canRedo={canRedo}
-                zoom={zoom}
-                onZoomIn={() => canvasRef.current?.zoomIn()}
-                onZoomOut={() => canvasRef.current?.zoomOut()}
-                onZoomReset={() => canvasRef.current?.zoomReset()}
-                strokeColor={strokeColor}
-                onStrokeColorChange={setStrokeColor}
-                fillColor={fillColor}
-                onFillColorChange={setFillColor}
-                strokeWidth={strokeWidth}
-                onStrokeWidthChange={setStrokeWidth}
-                onAddImage={(url) => canvasRef.current?.addImage(url)}
-                onExportPNG={() => canvasRef.current?.exportPNG()}
-                onExportSVG={() => canvasRef.current?.exportSVG()}
-                onExportJSON={() => canvasRef.current?.exportJSON()}
-              />
-              
               {/* Top-right tools: Branch, Comments, Notifications, Collaborators */}
-              <div className="absolute top-16 right-4 z-10 flex items-center gap-2">
-                <BranchMenu
-                  currentWhiteboard={whiteboard}
-                  branches={branches}
-                  onCreateBranch={async (name) => {
-                    if (selectedWhiteboardId) {
-                      await createBranch(selectedWhiteboardId, name);
-                    }
-                  }}
-                  onMergeBranch={async () => {
-                    if (selectedWhiteboardId && whiteboard?.parent_branch_id) {
-                      await mergeBranch(selectedWhiteboardId, whiteboard.parent_branch_id);
-                      setSelectedWhiteboardId(whiteboard.parent_branch_id);
-                      fetchWhiteboards();
-                    }
-                  }}
-                  onSelectBranch={setSelectedWhiteboardId}
-                  loading={branchLoading}
-                />
-                
-                <Button
-                  variant={commentMode ? "default" : "ghost"}
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => setCommentMode(!commentMode)}
-                >
-                  <MessageCircle className="h-4 w-4" />
-                </Button>
-                
-                <NotificationBell
-                  notifications={mentions}
-                  unreadCount={unreadCount}
-                  onMarkAsRead={markAsRead}
-                  onMarkAllAsRead={markAllAsRead}
-                  onNavigateToComment={(whiteboardId) => {
-                    const wb = whiteboards.find(w => w.id === whiteboardId);
-                    if (wb) {
-                      setSelectedWhiteboardId(whiteboardId);
-                    }
-                  }}
-                />
-                
-                <div className="w-px h-6 bg-border" />
-                
-                <CollaboratorAvatars 
-                  collaborators={collaborators} 
-                  currentUserColor={userColor} 
-                />
-              </div>
+              <WhiteboardHeader
+                whiteboard={whiteboard}
+                branches={branches}
+                selectedWhiteboardId={selectedWhiteboardId}
+                onCreateBranch={async (name) => {
+                  if (selectedWhiteboardId) {
+                    await createBranch(selectedWhiteboardId, name);
+                  }
+                }}
+                onMergeBranch={async () => {
+                  if (selectedWhiteboardId && whiteboard?.parent_branch_id) {
+                    await mergeBranch(selectedWhiteboardId, whiteboard.parent_branch_id);
+                    setSelectedWhiteboardId(whiteboard.parent_branch_id);
+                    fetchWhiteboards();
+                  }
+                }}
+                onSelectBranch={setSelectedWhiteboardId}
+                branchLoading={branchLoading}
+                commentMode={commentMode}
+                setCommentMode={setCommentMode}
+                mentions={mentions}
+                unreadCount={unreadCount}
+                markAsRead={markAsRead}
+                markAllAsRead={markAllAsRead}
+                onNavigateToComment={(whiteboardId) => {
+                  const wb = whiteboards.find(w => w.id === whiteboardId);
+                  if (wb) {
+                    setSelectedWhiteboardId(whiteboardId);
+                  }
+                }}
+                collaborators={collaborators}
+                userColor={userColor}
+                onHome={() => tldrawEditor?.setCamera({ x: 0, y: 0, z: 1 })}
+                hasRemoteActivity={hasRemoteActivity}
+                editor={tldrawEditor}
+              />
 
-              <CanvasContextMenu
-                selectedObject={selectedObject}
-                onDuplicate={() => canvasRef.current?.duplicateSelected()}
-                onDelete={() => canvasRef.current?.deleteSelected()}
-                onCopy={() => canvasRef.current?.copy()}
-                onPaste={() => canvasRef.current?.paste()}
-                onBringForward={() => canvasRef.current?.bringForward()}
-                onSendBackward={() => canvasRef.current?.sendBackward()}
-                onToggleLock={handleToggleLock}
-                onFlipHorizontal={handleFlipHorizontal}
-                onFlipVertical={handleFlipVertical}
-              >
-                <WhiteboardCanvas
-                  ref={canvasRef}
-                  activeTool={activeTool}
-                  strokeColor={strokeColor}
-                  fillColor={fillColor}
-                  strokeWidth={strokeWidth}
-                  onObjectsChange={handleObjectsChange}
-                  onViewportChange={handleViewportChange}
-                  onSelectionChange={setSelectedObject}
-                  initialViewport={whiteboard?.viewport}
-                  initialObjects={objects}
-                  onCanUndoChange={setCanUndo}
-                  onCanRedoChange={setCanRedo}
-                />
-              </CanvasContextMenu>
+              {selectedWhiteboardId && (
+                <>
+                  <TldrawWhiteboard
+                    whiteboardId={selectedWhiteboardId}
+                    commentMode={commentMode}
+                    onCanvasClick={(point) => {
+                      setActiveCommentPosition(point);
+                      setCommentMode(false);
+                    }}
+                    onEditorReady={(editor) => {
+                      setTldrawEditor(editor);
+                      handleRemoteActivity();
+                    }}
+                    drawerState={isBoardsDrawerOpen}
+                    isEditable={!isBoardsDrawerOpen}
+                    onCanvasInteraction={() => {
+                      // Quando o usuário interagir com o canvas, minimizar o drawer
+                      if (isBoardsDrawerOpen) {
+                        setIsBoardsDrawerOpen(false);
+                      }
+                    }}
+                  />
+                  
+                  {/* Máscara overlay quando drawer está aberto */}
+                  {isBoardsDrawerOpen && (
+                    <div 
+                      className="absolute inset-0 z-[50] bg-background/60 backdrop-blur-sm cursor-pointer"
+                      onClick={() => setIsBoardsDrawerOpen(false)}
+                      style={{ pointerEvents: 'auto' }}
+                    >
+                      <div className="absolute inset-0 flex items-center justify-center">
+                        <div className="bg-background/90 backdrop-blur-md border rounded-lg px-6 py-4 shadow-lg pointer-events-none">
+                          <p className="text-sm text-muted-foreground">
+                            Clique no canvas para começar a editar
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
 
               {/* Comment markers on canvas */}
-              {Object.entries(commentMarkers).map(([key, marker]) => {
-                const canvas = canvasRef.current?.getCanvas();
-                if (!canvas) return null;
-                const vpt = canvas.viewportTransform;
-                if (!vpt) return null;
-                
-                const screenX = (marker.x * zoom) + vpt[4];
-                const screenY = (marker.y * zoom) + vpt[5];
-                
+              {tldrawEditor && Object.entries(commentMarkers).map(([key, marker]) => {
+                const screenPoint = tldrawEditor.pageToScreen({ x: marker.x, y: marker.y });
                 return (
                   <CommentMarker
                     key={key}
-                    x={screenX}
-                    y={screenY}
+                    x={screenPoint.x}
+                    y={screenPoint.y}
                     count={marker.comments.length}
                     resolved={marker.resolved}
                     onClick={() => setActiveCommentPosition({ x: marker.x, y: marker.y })}
@@ -555,18 +695,23 @@ export default function Whiteboard() {
               })}
 
               {/* Active comment thread */}
-              {activeCommentPosition && (
-                <div 
+              {activeCommentPosition && tldrawEditor && canvasContainerRef.current && (
+                <div
                   className="absolute z-20"
                   style={{
                     left: Math.min(
-                      (activeCommentPosition.x * zoom) + (canvasRef.current?.getCanvas()?.viewportTransform?.[4] || 0) + 20,
-                      window.innerWidth - 340
+                      tldrawEditor.pageToScreen({ x: activeCommentPosition.x, y: activeCommentPosition.y }).x + 20,
+                      (canvasContainerRef.current?.getBoundingClientRect().width || window.innerWidth) - 340
                     ),
                     top: Math.min(
-                      (activeCommentPosition.y * zoom) + (canvasRef.current?.getCanvas()?.viewportTransform?.[5] || 0),
-                      window.innerHeight - 450
+                      tldrawEditor.pageToScreen({ x: activeCommentPosition.x, y: activeCommentPosition.y }).y,
+                      (canvasContainerRef.current?.getBoundingClientRect().height || window.innerHeight) - 450
                     ),
+                    pointerEvents: 'auto',
+                  }}
+                  onPointerDown={(e) => {
+                    // Permitir interação com o CommentThread
+                    e.stopPropagation();
                   }}
                 >
                   <CommentThread
@@ -594,52 +739,41 @@ export default function Whiteboard() {
                 </div>
               )}
 
-              {/* Collaborator cursors overlay */}
-              <CollaboratorCursors 
-                collaborators={collaborators}
-                canvasOffset={canvasOffset}
-                zoom={zoom}
-              />
 
-              {/* Bear cursor that follows mouse */}
-              <BearCursor
-                containerRef={canvasContainerRef}
-                isActive={!isAssistantOpen && !commentMode}
-                onClick={() => setIsAssistantOpen(true)}
-              />
+
 
               {saving && (
                 <div className="absolute bottom-4 right-4 bg-background/80 px-3 py-1.5 rounded-full text-xs flex items-center gap-2">
                   <Loader2 className="h-3 w-3 animate-spin" /> Salvando...
                 </div>
               )}
-              
+
               {commentMode && (
                 <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground px-4 py-2 rounded-full text-sm">
                   Clique no canvas para adicionar um comentário
                 </div>
               )}
+
+              {/* Coordinate Display */}
+              <div className="absolute top-4 right-4 z-10 bg-background/80 backdrop-blur-sm px-3 py-1.5 rounded-md text-xs font-mono text-muted-foreground border shadow-sm pointer-events-none select-none">
+                X: {Math.round(cursorPosition.x)}, Y: {Math.round(cursorPosition.y)}
+              </div>
             </>
           )}
         </div>
 
-        {/* Painel de propriedades */}
-        {!loading && (
-          <PropertiesPanel
-            selectedObject={selectedObject}
-            onUpdate={handlePropertiesUpdate}
-            onDelete={() => canvasRef.current?.deleteSelected()}
-            onDuplicate={() => canvasRef.current?.duplicateSelected()}
-            onBringForward={() => canvasRef.current?.bringForward()}
-            onSendBackward={() => canvasRef.current?.sendBackward()}
-          />
-        )}
+        <BearCursor
+          containerRef={canvasContainerRef}
+          isActive={!isAssistantOpen && !commentMode}
+          onClick={() => setIsAssistantOpen(true)}
+          activeTool={activeTool}
+        />
 
-        {/* Assistente IA Ursinho */}
         <BearAssistant
           isOpen={isAssistantOpen}
           onClose={() => setIsAssistantOpen(false)}
           onCreateElements={handleCreateElementsFromAI}
+          activeTool={activeTool}
         />
       </div>
     </TooltipProvider>

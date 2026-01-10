@@ -23,7 +23,7 @@ import {
   X,
   MessageCircle,
 } from 'lucide-react';
-import { usePR, useSubmitReview, useCreatePRComment, useMergePR } from '@/hooks/usePRs';
+import { usePR, useSubmitReview, useCreatePRComment, useMergePR, useResolveThread, useAddReaction } from '@/hooks/usePRs';
 import { formatDistanceToNow, format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Textarea } from '@/components/ui/textarea';
@@ -32,15 +32,15 @@ import { DiffViewer } from '@/components/codigo/DiffViewer';
 import { useCreateInlineComment } from '@/hooks/usePRs';
 
 export function PRDetail() {
-  const { repoId, prNumber: prNumberStr } = useParams<{ 
-    repoId: string; 
+  const { repoId, prNumber: prNumberStr } = useParams<{
+    repoId: string;
     prNumber: string;
   }>();
   const location = useLocation();
   const navigate = useNavigate();
   const prNumber = prNumberStr ? parseInt(prNumberStr, 10) : undefined;
   const [activeTab, setActiveTab] = useState('commits');
-  
+
   // Extrair projectId da URL: /project/:projectId/code/...
   const projectIdMatch = location.pathname.match(/\/project\/([^/]+)/);
   const projectId = projectIdMatch ? projectIdMatch[1] : undefined;
@@ -49,15 +49,17 @@ export function PRDetail() {
   const submitReview = useSubmitReview();
   const createComment = useCreatePRComment();
   const createInlineComment = useCreateInlineComment();
+  const resolveThread = useResolveThread();
+  const addReaction = useAddReaction();
   const mergePR = useMergePR();
   const [reviewDialogOpen, setReviewDialogOpen] = useState(false);
   const [reviewState, setReviewState] = useState<'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED'>('COMMENTED');
   const [reviewBody, setReviewBody] = useState('');
   const [commentBody, setCommentBody] = useState('');
   const [selectedFile, setSelectedFile] = useState<string | undefined>();
-  const [inlineCommentDialogOpen, setInlineCommentDialogOpen] = useState(false);
-  const [inlineCommentData, setInlineCommentData] = useState<{ file: string; line: number; side: 'old' | 'new' } | null>(null);
-  const [inlineCommentBody, setInlineCommentBody] = useState('');
+
+  // New state for inline comments
+  const [draftLine, setDraftLine] = useState<{ file: string; line: number; side: 'old' | 'new' } | null>(null);
 
   // Auto-select first file when files are loaded
   useEffect(() => {
@@ -329,8 +331,8 @@ export function PRDetail() {
           <div className="flex items-center gap-2">
             <span className="text-sm text-muted-foreground">Tarefas vinculadas:</span>
             {linked_tarefas.map((tarefa: any) => (
-              <Badge 
-                key={tarefa.id} 
+              <Badge
+                key={tarefa.id}
                 variant="secondary"
                 className="cursor-pointer hover:bg-secondary/80"
                 onClick={() => {
@@ -393,99 +395,107 @@ export function PRDetail() {
             <TabsContent value="commits" className="mt-0 h-full m-0">
               <ScrollArea className="h-full">
                 <div className="p-4">
-                {pr.commits && pr.commits.length > 0 ? (
-                  <div className="space-y-2">
-                    {pr.commits.map((commit: any) => (
-                      <Card key={commit.sha}>
-                        <CardContent className="p-4">
-                          <div className="flex items-start justify-between">
-                            <div className="flex-1">
-                              <p className="font-medium">{commit.message}</p>
-                              <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
-                                <div className="flex items-center gap-1">
-                                  <GitCommit className="h-3 w-3" />
-                                  <span className="font-mono text-xs">{commit.sha.substring(0, 7)}</span>
+                  {pr.commits && pr.commits.length > 0 ? (
+                    <div className="space-y-2">
+                      {pr.commits.map((commit: any) => (
+                        <Card key={commit.sha}>
+                          <CardContent className="p-4">
+                            <div className="flex items-start justify-between">
+                              <div className="flex-1">
+                                <p className="font-medium">{commit.message}</p>
+                                <div className="flex items-center gap-4 mt-2 text-sm text-muted-foreground">
+                                  <div className="flex items-center gap-1">
+                                    <GitCommit className="h-3 w-3" />
+                                    <span className="font-mono text-xs">{commit.sha.substring(0, 7)}</span>
+                                  </div>
+                                  <span>{commit.author}</span>
+                                  <span>{format(new Date(commit.date), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span>
                                 </div>
-                                <span>{commit.author}</span>
-                                <span>{format(new Date(commit.date), "dd/MM/yyyy 'às' HH:mm", { locale: ptBR })}</span>
                               </div>
                             </div>
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="text-muted-foreground">Nenhum commit</p>
-                )}
+                          </CardContent>
+                        </Card>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="text-muted-foreground">Nenhum commit</p>
+                  )}
                 </div>
               </ScrollArea>
             </TabsContent>
 
             <TabsContent value="files" className="mt-0 h-full m-0">
-                {pr.files && pr.files.length > 0 ? (
-                  <div className="h-full">
-                    <DiffViewer
-                      files={pr.files}
-                      selectedFile={selectedFile}
-                      onFileSelect={setSelectedFile}
-                      onLineClick={(file, line, side) => {
-                        setInlineCommentData({ file, line, side });
-                        setInlineCommentDialogOpen(true);
-                      }}
-                    />
-                    <Dialog open={inlineCommentDialogOpen} onOpenChange={setInlineCommentDialogOpen}>
-                      <DialogContent>
-                        <DialogHeader>
-                          <DialogTitle>
-                            Comentário inline em {inlineCommentData?.file}:{inlineCommentData?.line}
-                          </DialogTitle>
-                        </DialogHeader>
-                        <div className="space-y-4">
-                          <Textarea
-                            placeholder="Escreva seu comentário..."
-                            value={inlineCommentBody}
-                            onChange={(e) => setInlineCommentBody(e.target.value)}
-                            rows={6}
-                          />
-                          <div className="flex justify-end gap-2">
-                            <Button variant="outline" onClick={() => {
-                              setInlineCommentDialogOpen(false);
-                              setInlineCommentBody('');
-                              setInlineCommentData(null);
-                            }}>
-                              Cancelar
-                            </Button>
-                            <Button
-                              onClick={async () => {
-                                if (repoId && prNumber && inlineCommentData && inlineCommentBody) {
-                                  await createInlineComment.mutateAsync({
-                                    repoId,
-                                    prNumber,
-                                    body: inlineCommentBody,
-                                    path: inlineCommentData.file,
-                                    line: inlineCommentData.line,
-                                    side: inlineCommentData.side === 'old' ? 'LEFT' : 'RIGHT',
-                                  });
-                                  setInlineCommentDialogOpen(false);
-                                  setInlineCommentBody('');
-                                  setInlineCommentData(null);
-                                }
-                              }}
-                              disabled={createInlineComment.isPending || !inlineCommentBody}
-                            >
-                              {createInlineComment.isPending ? 'Enviando...' : 'Comentar'}
-                            </Button>
-                          </div>
-                        </div>
-                      </DialogContent>
-                    </Dialog>
-                  </div>
-                ) : (
-                  <div className="flex items-center justify-center h-full">
-                    <p className="text-muted-foreground">Nenhum arquivo alterado</p>
-                  </div>
-                )}
+              {pr.files && pr.files.length > 0 ? (
+                <div className="h-full">
+                  <DiffViewer
+                    files={pr.files}
+                    comments={pr.comments?.inline || []}
+                    selectedFile={selectedFile}
+                    onFileSelect={setSelectedFile}
+                    draftLine={draftLine}
+                    onLineClick={(file, line, side) => {
+                      if (line === 0) {
+                        setDraftLine(null); // Cancel draft
+                      } else {
+                        setDraftLine({ file, line, side });
+                      }
+                    }}
+                    onReplyComment={async (threadId, body) => {
+                      if (repoId && prNumber) {
+                        if (threadId === 'NEW_THREAD' && draftLine) {
+                          // Create new inline comment
+                          await createInlineComment.mutateAsync({
+                            repoId,
+                            prNumber,
+                            body,
+                            path: draftLine.file,
+                            line: draftLine.line,
+                            side: draftLine.side === 'old' ? 'LEFT' : 'RIGHT',
+                          });
+                          setDraftLine(null);
+                        } else {
+                          // Reply to existing thread
+                          await createInlineComment.mutateAsync({
+                            repoId,
+                            prNumber,
+                            body,
+                            path: '', // Not needed for reply
+                            line: 0, // Not needed for reply
+                            side: 'LEFT', // Not needed for reply
+                            in_reply_to_id: threadId
+                          });
+                        }
+                      }
+                    }}
+                    onResolveThread={async (threadId, resolution, reason) => {
+                      if (repoId && prNumber) {
+                        await resolveThread.mutateAsync({
+                          repoId,
+                          prNumber,
+                          threadId,
+                          resolution,
+                          reason
+                        });
+                      }
+                    }}
+                    onReaction={async (commentId, reaction, reason) => {
+                      if (repoId && prNumber) {
+                        await addReaction.mutateAsync({
+                          repoId,
+                          prNumber,
+                          commentId,
+                          reaction,
+                          reason
+                        });
+                      }
+                    }}
+                  />
+                </div>
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <p className="text-muted-foreground">Nenhum arquivo alterado</p>
+                </div>
+              )}
             </TabsContent>
 
             <TabsContent value="reviews" className="mt-0 h-full m-0">
@@ -614,12 +624,12 @@ export function PRDetail() {
                                   size="sm"
                                   className="mt-2"
                                   onClick={() => {
-                                    setInlineCommentData({ 
-                                      file: comment.path || '', 
-                                      line: comment.line || 0, 
-                                      side: comment.side === 'LEFT' ? 'old' : 'new' 
+                                    setDraftLine({
+                                      file: comment.path || '',
+                                      line: comment.line || 0,
+                                      side: comment.side === 'LEFT' ? 'old' : 'new'
                                     });
-                                    setInlineCommentDialogOpen(true);
+                                    setActiveTab('files');
                                   }}
                                 >
                                   <MessageCircle className="h-3 w-3 mr-1" />
@@ -633,11 +643,11 @@ export function PRDetail() {
                     </div>
                   )}
 
-                  {(!pr.reviews || pr.reviews.length === 0) && 
-                   (!pr.comments?.general || pr.comments.general.length === 0) && 
-                   (!pr.comments?.inline || pr.comments.inline.length === 0) && (
-                    <p className="text-muted-foreground">Nenhum review ou comentário ainda</p>
-                  )}
+                  {(!pr.reviews || pr.reviews.length === 0) &&
+                    (!pr.comments?.general || pr.comments.general.length === 0) &&
+                    (!pr.comments?.inline || pr.comments.inline.length === 0) && (
+                      <p className="text-muted-foreground">Nenhum review ou comentário ainda</p>
+                    )}
                 </div>
               </ScrollArea>
             </TabsContent>

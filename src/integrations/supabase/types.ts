@@ -124,6 +124,53 @@ export type Database = {
         }
         Relationships: []
       }
+      project_invites: {
+        Row: {
+          id: string
+          project_id: string
+          email: string
+          role: Database["public"]["Enums"]["app_role"]
+          invited_by: string
+          token: string
+          accepted_at: string | null
+          expires_at: string
+          created_at: string
+          updated_at: string
+        }
+        Insert: {
+          id?: string
+          project_id: string
+          email: string
+          role?: Database["public"]["Enums"]["app_role"]
+          invited_by: string
+          token?: string
+          accepted_at?: string | null
+          expires_at?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Update: {
+          id?: string
+          project_id?: string
+          email?: string
+          role?: Database["public"]["Enums"]["app_role"]
+          invited_by?: string
+          token?: string
+          accepted_at?: string | null
+          expires_at?: string
+          created_at?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "project_invites_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_members: {
         Row: {
           created_at: string
@@ -814,6 +861,7 @@ export type Database = {
         Row: {
           branch_metadata: Json | null
           branch_name: string | null
+          canvas_snapshot: Json | null
           created_at: string
           created_by: string | null
           id: string
@@ -821,12 +869,14 @@ export type Database = {
           parent_branch_id: string | null
           project_id: string
           settings: Json | null
+          snapshot_version: number
           updated_at: string
           viewport: Json | null
         }
         Insert: {
           branch_metadata?: Json | null
           branch_name?: string | null
+          canvas_snapshot?: Json | null
           created_at?: string
           created_by?: string | null
           id?: string
@@ -834,12 +884,14 @@ export type Database = {
           parent_branch_id?: string | null
           project_id: string
           settings?: Json | null
+          snapshot_version?: number
           updated_at?: string
           viewport?: Json | null
         }
         Update: {
           branch_metadata?: Json | null
           branch_name?: string | null
+          canvas_snapshot?: Json | null
           created_at?: string
           created_by?: string | null
           id?: string
@@ -847,6 +899,7 @@ export type Database = {
           parent_branch_id?: string | null
           project_id?: string
           settings?: Json | null
+          snapshot_version?: number
           updated_at?: string
           viewport?: Json | null
         }

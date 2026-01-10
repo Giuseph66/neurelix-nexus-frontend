@@ -1,9 +1,11 @@
 import { useState, useMemo, useEffect } from 'react';
 import { ScrollArea } from '@/components/ui/scroll-area';
-import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ChevronDown, ChevronRight, Plus, Minus } from 'lucide-react';
+import { Plus, Minus, FileText, ChevronRight, ChevronDown, Image as ImageIcon, Film, FileType } from 'lucide-react';
 import { cn } from '@/lib/utils';
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable';
+import { CommentThread } from './CommentThread';
+import type { PRComment } from '@/types/codigo';
 
 interface DiffFile {
   filename: string;
@@ -12,13 +14,19 @@ interface DiffFile {
   deletions: number;
   changes: number;
   patch?: string;
+  raw_url?: string;
 }
 
 interface DiffViewerProps {
   files: DiffFile[];
+  comments?: PRComment[];
   onLineClick?: (file: string, line: number, side: 'old' | 'new') => void;
   selectedFile?: string;
   onFileSelect?: (filename: string) => void;
+  onReplyComment?: (threadId: string, body: string) => Promise<void>;
+  onResolveThread?: (threadId: string, resolution: 'RESOLVED' | 'WONT_FIX', reason?: string) => Promise<void>;
+  onReaction?: (commentId: string, reaction: 'like' | 'dislike' | 'contra', reason?: string) => Promise<void>;
+  draftLine?: { file: string; line: number; side: 'old' | 'new' } | null;
 }
 
 interface DiffLine {
@@ -28,85 +36,110 @@ interface DiffLine {
   content: string;
 }
 
-export function DiffViewer({ files, onLineClick, selectedFile, onFileSelect }: DiffViewerProps) {
-  const [expandedFiles, setExpandedFiles] = useState<Set<string>>(new Set());
-  
-  // Auto-expand selected file
+export function DiffViewer({
+  files,
+  comments = [],
+  onLineClick,
+  selectedFile,
+  onFileSelect,
+  onReplyComment,
+  onResolveThread,
+  onReaction,
+  draftLine
+}: DiffViewerProps) {
+  // Auto-select first file if none selected
   useEffect(() => {
-    if (selectedFile && !expandedFiles.has(selectedFile)) {
-      setExpandedFiles(prev => new Set([...prev, selectedFile]));
+    if (!selectedFile && files.length > 0 && onFileSelect) {
+      onFileSelect(files[0].filename);
     }
-  }, [selectedFile, expandedFiles]);
+  }, [selectedFile, files, onFileSelect]);
 
-  const parsedFiles = useMemo(() => {
-    return files.map(file => {
-      if (!file.patch) {
-        return { ...file, lines: [] as DiffLine[] };
-      }
+  const parsedFile = useMemo(() => {
+    const file = files.find(f => f.filename === selectedFile);
+    if (!file) return null;
 
-      const lines: DiffLine[] = [];
-      const patchLines = file.patch.split('\n');
-      let oldLineNum = 0;
-      let newLineNum = 0;
-      let inHunk = false;
+    // Check for media types
+    const extension = file.filename.split('.').pop()?.toLowerCase();
+    const isImage = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'ico'].includes(extension || '');
+    const isVideo = ['mp4', 'webm', 'ogg', 'mov'].includes(extension || '');
+    const isPdf = ['pdf'].includes(extension || '');
 
-      for (const line of patchLines) {
-        if (line.startsWith('@@')) {
-          // Hunk header
-          const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
-          if (match) {
-            oldLineNum = parseInt(match[1]) - 1;
-            newLineNum = parseInt(match[2]) - 1;
-            inHunk = true;
-            lines.push({ type: 'header', content: line });
-          }
-        } else if (inHunk) {
-          if (line.startsWith('+') && !line.startsWith('+++')) {
-            newLineNum++;
-            lines.push({
-              type: 'added',
-              oldLine: undefined,
-              newLine: newLineNum,
-              content: line.substring(1),
-            });
-          } else if (line.startsWith('-') && !line.startsWith('---')) {
-            oldLineNum++;
-            lines.push({
-              type: 'removed',
-              oldLine: oldLineNum,
-              newLine: undefined,
-              content: line.substring(1),
-            });
-          } else if (line.startsWith(' ')) {
-            oldLineNum++;
-            newLineNum++;
-            lines.push({
-              type: 'context',
-              oldLine: oldLineNum,
-              newLine: newLineNum,
-              content: line.substring(1),
-            });
-          } else {
-            lines.push({ type: 'context', content: line });
-          }
+    if (isImage || isVideo || isPdf) {
+      return { ...file, lines: [], isMedia: true, mediaType: isImage ? 'image' : isVideo ? 'video' : 'pdf' };
+    }
+
+    if (!file.patch) return { ...file, lines: [], isMedia: false };
+
+    const lines: DiffLine[] = [];
+    const patchLines = file.patch.split('\n');
+    let oldLineNum = 0;
+    let newLineNum = 0;
+    let inHunk = false;
+
+    for (const line of patchLines) {
+      if (line.startsWith('@@')) {
+        // Hunk header
+        const match = line.match(/@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+        if (match) {
+          oldLineNum = parseInt(match[1]) - 1;
+          newLineNum = parseInt(match[2]) - 1;
+          inHunk = true;
+          lines.push({ type: 'header', content: line });
+        }
+      } else if (inHunk) {
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          newLineNum++;
+          lines.push({
+            type: 'added',
+            oldLine: undefined,
+            newLine: newLineNum,
+            content: line.substring(1),
+          });
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          oldLineNum++;
+          lines.push({
+            type: 'removed',
+            oldLine: oldLineNum,
+            newLine: undefined,
+            content: line.substring(1),
+          });
+        } else if (line.startsWith(' ')) {
+          oldLineNum++;
+          newLineNum++;
+          lines.push({
+            type: 'context',
+            oldLine: oldLineNum,
+            newLine: newLineNum,
+            content: line.substring(1),
+          });
         } else {
           lines.push({ type: 'context', content: line });
         }
+      } else {
+        lines.push({ type: 'context', content: line });
       }
-
-      return { ...file, lines };
-    });
-  }, [files]);
-
-  const toggleFile = (filename: string) => {
-    const newExpanded = new Set(expandedFiles);
-    if (newExpanded.has(filename)) {
-      newExpanded.delete(filename);
-    } else {
-      newExpanded.add(filename);
     }
-    setExpandedFiles(newExpanded);
-  };
+
+    return { ...file, lines, isMedia: false };
+  }, [files, selectedFile]);
+
+  const fileComments = useMemo(() => {
+    if (!selectedFile || !comments) return {};
+
+    // Group comments by line number
+    const grouped: Record<number, PRComment[]> = {};
+
+    comments.forEach(comment => {
+      if (comment.path === selectedFile && comment.line_number) {
+        if (!grouped[comment.line_number]) {
+          grouped[comment.line_number] = [];
+        }
+        grouped[comment.line_number].push(comment);
+      }
+    });
+
+    return grouped;
+  }, [selectedFile, comments]);
 
   const handleLineClick = (file: string, line: DiffLine, side: 'old' | 'new') => {
     if (onLineClick && (line.oldLine || line.newLine)) {
@@ -117,155 +150,241 @@ export function DiffViewer({ files, onLineClick, selectedFile, onFileSelect }: D
     }
   };
 
-  const getFileStatusBadge = (status: string) => {
-    switch (status) {
-      case 'added':
-        return <Badge className="bg-green-600">+{files.find(f => f.filename === selectedFile)?.additions || 0}</Badge>;
-      case 'removed':
-        return <Badge variant="destructive">-{files.find(f => f.filename === selectedFile)?.deletions || 0}</Badge>;
-      case 'modified':
-        return (
-          <>
-            <Badge className="bg-green-600">+{files.find(f => f.filename === selectedFile)?.additions || 0}</Badge>
-            <Badge variant="destructive">-{files.find(f => f.filename === selectedFile)?.deletions || 0}</Badge>
-          </>
-        );
-      default:
-        return null;
-    }
+  const getFileIcon = (filename: string) => {
+    const ext = filename.split('.').pop()?.toLowerCase();
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'].includes(ext || '')) return <ImageIcon className="h-4 w-4" />;
+    if (['mp4', 'webm', 'ogg', 'mov'].includes(ext || '')) return <Film className="h-4 w-4" />;
+    if (ext === 'pdf') return <FileType className="h-4 w-4" />;
+    return <FileText className="h-4 w-4" />;
   };
 
   return (
-    <div className="flex flex-col h-full">
-      {/* File List */}
-      <div className="border-b p-2 bg-muted/30 flex-shrink-0">
-        <div className="text-xs font-semibold text-muted-foreground uppercase mb-2">Arquivos alterados</div>
-        <ScrollArea className="max-h-32">
-          <div className="space-y-1">
-            {files.map((file) => {
-              const isSelected = selectedFile === file.filename;
-
-              return (
-                <div
-                  key={file.filename}
-                  className={cn(
-                    "flex items-center gap-2 px-2 py-1.5 text-sm cursor-pointer hover:bg-muted rounded transition-colors",
-                    isSelected && "bg-primary/10 text-primary font-medium"
-                  )}
-                  onClick={() => {
-                    onFileSelect?.(file.filename);
-                  }}
-                >
-                  <span className="flex-1 truncate font-mono text-xs">{file.filename}</span>
-                  <div className="flex items-center gap-1 flex-shrink-0">
-                    {file.status === 'added' && <Badge className="bg-green-600 text-xs">+{file.additions}</Badge>}
-                    {file.status === 'removed' && <Badge variant="destructive" className="text-xs">-{file.deletions}</Badge>}
-                    {file.status === 'modified' && (
-                      <>
-                        <Badge className="bg-green-600 text-xs">+{file.additions}</Badge>
-                        <Badge variant="destructive" className="text-xs">-{file.deletions}</Badge>
-                      </>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+    <div className="h-full border rounded-md overflow-hidden bg-background">
+      <ResizablePanelGroup direction="horizontal">
+        {/* Sidebar - File List */}
+        <ResizablePanel defaultSize={25} minSize={15} maxSize={40} className="border-r bg-muted/10">
+          <div className="flex flex-col h-full">
+            <div className="p-3 border-b bg-muted/20">
+              <h3 className="text-sm font-semibold text-muted-foreground flex items-center gap-2">
+                <FileText className="h-4 w-4" />
+                Arquivos ({files.length})
+              </h3>
+            </div>
+            <ScrollArea className="flex-1">
+              <div className="p-2 space-y-1">
+                {files.map((file) => {
+                  const isSelected = selectedFile === file.filename;
+                  return (
+                    <button
+                      key={file.filename}
+                      onClick={() => onFileSelect?.(file.filename)}
+                      className={cn(
+                        "w-full flex items-center gap-2 px-3 py-2 text-sm rounded-md transition-colors text-left group",
+                        isSelected
+                          ? "bg-primary/10 text-primary font-medium"
+                          : "hover:bg-muted text-muted-foreground hover:text-foreground"
+                      )}
+                    >
+                      <div className={cn(
+                        "w-1.5 h-1.5 rounded-full flex-shrink-0",
+                        file.status === 'added' && "bg-green-500",
+                        file.status === 'removed' && "bg-red-500",
+                        file.status === 'modified' && "bg-yellow-500"
+                      )} />
+                      <div className="flex-shrink-0 text-muted-foreground/70">
+                        {getFileIcon(file.filename)}
+                      </div>
+                      <span className="flex-1 truncate font-mono text-xs" title={file.filename}>
+                        {file.filename}
+                      </span>
+                      {(file.additions > 0 || file.deletions > 0) && (
+                        <div className="flex items-center gap-1 text-[10px] opacity-70 group-hover:opacity-100">
+                          {file.additions > 0 && <span className="text-green-600">+{file.additions}</span>}
+                          {file.deletions > 0 && <span className="text-red-600">-{file.deletions}</span>}
+                        </div>
+                      )}
+                    </button>
+                  );
+                })}
+              </div>
+            </ScrollArea>
           </div>
-        </ScrollArea>
-      </div>
+        </ResizablePanel>
 
-      {/* Diff Content */}
-      <ScrollArea className="flex-1">
-        {selectedFile ? (
-          (() => {
-            const file = parsedFiles.find(f => f.filename === selectedFile);
-            if (!file) {
-              return (
-                <div className="flex items-center justify-center h-full text-muted-foreground">
-                  <p>Arquivo não encontrado</p>
-                </div>
-              );
-            }
-            
-            if (!file.lines || file.lines.length === 0) {
-              return (
-                <div className="flex items-center justify-center h-full text-muted-foreground">
-                  <p>Sem diff disponível para este arquivo</p>
-                </div>
-              );
-            }
+        <ResizableHandle />
 
-            return (
-              <div className="p-4">
-                <div className="bg-[#1e1e1e] rounded-lg overflow-hidden border">
-                  <div className="px-4 py-2 border-b bg-[#252526] text-xs text-gray-400 flex items-center justify-between">
-                    <span className="font-mono">{selectedFile}</span>
-                    <div className="flex items-center gap-2">
-                      {getFileStatusBadge(file.status)}
+        {/* Main Content - Diff View */}
+        <ResizablePanel defaultSize={75}>
+          <div className="h-full flex flex-col bg-background">
+            {selectedFile && parsedFile ? (
+              <>
+                <div className="p-3 border-b bg-muted/10 flex items-center justify-between sticky top-0 z-10">
+                  <div className="flex items-center gap-3">
+                    <span className="font-mono text-sm font-medium">{selectedFile}</span>
+                    <div className="flex gap-1">
+                      {parsedFile.status === 'added' && <Badge variant="outline" className="text-green-600 border-green-200 bg-green-50">Added</Badge>}
+                      {parsedFile.status === 'removed' && <Badge variant="outline" className="text-red-600 border-red-200 bg-red-50">Deleted</Badge>}
+                      {parsedFile.status === 'modified' && <Badge variant="outline" className="text-yellow-600 border-yellow-200 bg-yellow-50">Modified</Badge>}
                     </div>
                   </div>
-                  <div className="overflow-auto">
-                    <table className="w-full border-collapse">
-                      <tbody>
-                        {file.lines.map((line, idx) => {
-                          const lineNum = line.newLine || line.oldLine;
-                          const side = line.newLine ? 'new' : 'old';
-                          const isClickable = (line.type === 'added' || line.type === 'removed') && lineNum;
-
-                          return (
-                            <tr
-                              key={idx}
-                              className={cn(
-                                "group",
-                                line.type === 'added' && "bg-green-950/30",
-                                line.type === 'removed' && "bg-red-950/30",
-                                line.type === 'header' && "bg-[#252526]"
-                              )}
-                            >
-                              {line.oldLine !== undefined && (
-                                <td className="px-2 py-0.5 text-right text-xs text-gray-500 select-none border-r border-gray-700 w-12 bg-[#1e1e1e]">
-                                  {line.type !== 'added' ? line.oldLine : ''}
-                                </td>
-                              )}
-                              {line.newLine !== undefined && (
-                                <td className="px-2 py-0.5 text-right text-xs text-gray-500 select-none border-r border-gray-700 w-12 bg-[#1e1e1e]">
-                                  {line.type !== 'removed' ? line.newLine : ''}
-                                </td>
-                              )}
-                              {line.oldLine === undefined && line.newLine === undefined && (
-                                <td colSpan={2} className="px-2 py-0.5 text-xs text-gray-500 select-none border-r border-gray-700 bg-[#1e1e1e]"></td>
-                              )}
-                              <td
-                                className={cn(
-                                  "px-4 py-0.5 text-sm font-mono whitespace-pre",
-                                  line.type === 'added' && "text-green-400",
-                                  line.type === 'removed' && "text-red-400",
-                                  line.type === 'header' && "text-gray-400",
-                                  line.type === 'context' && "text-gray-300",
-                                  isClickable && "cursor-pointer hover:bg-opacity-50"
-                                )}
-                                onClick={() => isClickable && handleLineClick(selectedFile, line, side)}
-                              >
-                                {line.type === 'added' && <Plus className="h-3 w-3 inline mr-1 text-green-400" />}
-                                {line.type === 'removed' && <Minus className="h-3 w-3 inline mr-1 text-red-400" />}
-                                {line.content}
-                              </td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
+                  <div className="flex items-center gap-3 text-xs text-muted-foreground">
+                    <span className="flex items-center text-green-600"><Plus className="h-3 w-3 mr-0.5" />{parsedFile.additions}</span>
+                    <span className="flex items-center text-red-600"><Minus className="h-3 w-3 mr-0.5" />{parsedFile.deletions}</span>
                   </div>
                 </div>
+
+                <ScrollArea className="flex-1">
+                  {parsedFile.isMedia && parsedFile.raw_url ? (
+                    <div className="flex flex-col items-center justify-center p-8 min-h-[300px]">
+                      {parsedFile.mediaType === 'image' && (
+                        <div className="max-w-full overflow-hidden rounded-lg border shadow-sm">
+                          <img src={parsedFile.raw_url} alt={parsedFile.filename} className="max-w-full h-auto" />
+                        </div>
+                      )}
+                      {parsedFile.mediaType === 'video' && (
+                        <div className="max-w-full overflow-hidden rounded-lg border shadow-sm">
+                          <video src={parsedFile.raw_url} controls className="max-w-full max-h-[600px]" />
+                        </div>
+                      )}
+                      {parsedFile.mediaType === 'pdf' && (
+                        <div className="w-full h-[800px] rounded-lg border shadow-sm overflow-hidden">
+                          <iframe src={parsedFile.raw_url} className="w-full h-full" title={parsedFile.filename} />
+                        </div>
+                      )}
+                      <div className="mt-4 text-sm text-muted-foreground flex items-center gap-2">
+                        <a href={parsedFile.raw_url} target="_blank" rel="noopener noreferrer" className="hover:underline flex items-center gap-1">
+                          Abrir original em nova aba
+                          <ChevronRight className="h-3 w-3" />
+                        </a>
+                      </div>
+                    </div>
+                  ) : parsedFile.lines && parsedFile.lines.length > 0 ? (
+                    <div className="min-w-full inline-block">
+                      <table className="w-full border-collapse text-sm font-mono">
+                        <tbody>
+                          {parsedFile.lines.map((line, idx) => {
+                            const lineNum = line.newLine || line.oldLine;
+                            const side = line.newLine ? 'new' : 'old';
+                            const isClickable = (line.type === 'added' || line.type === 'removed' || line.type === 'context') && lineNum;
+                            const commentsForLine = lineNum ? fileComments[lineNum] : undefined;
+
+                            return (
+                              <div key={idx} className="contents">
+                                <tr
+                                  className={cn(
+                                    "group hover:bg-muted/30 transition-colors",
+                                    line.type === 'added' && "bg-green-500/10 hover:bg-green-500/20",
+                                    line.type === 'removed' && "bg-red-500/10 hover:bg-red-500/20",
+                                    line.type === 'header' && "bg-muted/30 text-muted-foreground"
+                                  )}
+                                >
+                                  {/* Old Line Number */}
+                                  <td className="w-[50px] min-w-[50px] text-right px-2 py-0.5 select-none border-r text-xs text-muted-foreground/50 bg-muted/5">
+                                    {line.type !== 'added' && line.type !== 'header' ? line.oldLine : ''}
+                                  </td>
+
+                                  {/* New Line Number */}
+                                  <td className="w-[50px] min-w-[50px] text-right px-2 py-0.5 select-none border-r text-xs text-muted-foreground/50 bg-muted/5">
+                                    {line.type !== 'removed' && line.type !== 'header' ? line.newLine : ''}
+                                  </td>
+
+                                  {/* Content */}
+                                  <td
+                                    className={cn(
+                                      "px-4 py-0.5 whitespace-pre break-all",
+                                      line.type === 'added' && "text-green-700 dark:text-green-400",
+                                      line.type === 'removed' && "text-red-700 dark:text-red-400",
+                                      line.type === 'header' && "text-blue-600 dark:text-blue-400 font-medium",
+                                      isClickable && "cursor-pointer"
+                                    )}
+                                    onClick={() => isClickable && handleLineClick(selectedFile, line, side)}
+                                  >
+                                    <span className="select-none mr-2 opacity-50 w-3 inline-block text-center">
+                                      {line.type === 'added' && '+'}
+                                      {line.type === 'removed' && '-'}
+                                    </span>
+                                    {line.content}
+                                  </td>
+                                </tr>
+                                {/* Inline Comments */}
+                                {commentsForLine && commentsForLine.length > 0 && (
+                                  (() => {
+                                    const displayedComments = commentsForLine.filter(comment => {
+                                      const commentSide = comment.side === 'LEFT' ? 'old' : 'new';
+                                      return commentSide === side;
+                                    });
+
+                                    if (displayedComments.length === 0) return null;
+
+                                    return (
+                                      <tr>
+                                        <td colSpan={3} className="px-0 py-0 border-b">
+                                          <CommentThread
+                                            comments={displayedComments}
+                                            onReply={async (body) => {
+                                              if (onReplyComment && displayedComments[0].id) {
+                                                await onReplyComment(displayedComments[0].id, body);
+                                              }
+                                            }}
+                                            onResolve={onResolveThread ? async (resolution, reason) => {
+                                              if (displayedComments[0].id) {
+                                                await onResolveThread(displayedComments[0].id, resolution, reason);
+                                              }
+                                            } : undefined}
+                                            onReaction={onReaction}
+                                          />
+                                        </td>
+                                      </tr>
+                                    );
+                                  })()
+                                )}
+                                {/* Draft Comment Form */}
+                                {selectedFile && onLineClick && draftLine &&
+                                  draftLine.file === selectedFile &&
+                                  ((side === 'old' && line.oldLine === draftLine.line && draftLine.side === 'old') ||
+                                    (side === 'new' && line.newLine === draftLine.line && draftLine.side === 'new')) && (
+                                    <tr>
+                                      <td colSpan={3} className="px-0 py-0 border-b">
+                                        <CommentThread
+                                          comments={[]}
+                                          onReply={async (body) => {
+                                            if (onReplyComment) {
+                                              await onReplyComment('NEW_THREAD', body);
+                                            }
+                                          }}
+                                          isDraft={true}
+                                          onCancel={() => onLineClick(selectedFile, 0, side)} // 0 line means cancel
+                                        />
+                                      </td>
+                                    </tr>
+                                  )}
+                              </div>
+                            );
+                          })}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-40 text-muted-foreground">
+                      <FileText className="h-8 w-8 mb-2 opacity-20" />
+                      <p>
+                        {parsedFile.isMedia && !parsedFile.raw_url
+                          ? "Preview não disponível (URL não encontrada)"
+                          : "No content changes to display"}
+                      </p>
+                    </div>
+                  )}
+                </ScrollArea>
+              </>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full text-muted-foreground">
+                <FileText className="h-12 w-12 mb-4 opacity-10" />
+                <p>Select a file to view changes</p>
               </div>
-            );
-          })()
-        ) : (
-          <div className="flex items-center justify-center h-full text-muted-foreground">
-            <p>Selecione um arquivo para ver o diff</p>
+            )}
           </div>
-        )}
-      </ScrollArea>
+        </ResizablePanel>
+      </ResizablePanelGroup>
     </div>
   );
 }

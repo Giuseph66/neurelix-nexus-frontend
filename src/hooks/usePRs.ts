@@ -198,19 +198,19 @@ export function useCreatePR() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ 
-      repoId, 
-      title, 
-      description, 
-      head, 
-      base, 
-      draft = false 
-    }: { 
-      repoId: string; 
-      title: string; 
-      description?: string; 
-      head: string; 
-      base: string; 
+    mutationFn: async ({
+      repoId,
+      title,
+      description,
+      head,
+      base,
+      draft = false
+    }: {
+      repoId: string;
+      title: string;
+      description?: string;
+      head: string;
+      base: string;
       draft?: boolean;
     }) => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -250,21 +250,21 @@ export function useCreateInlineComment() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ 
-      repoId, 
-      prNumber, 
-      body, 
-      path, 
-      line, 
-      side, 
-      in_reply_to_id 
-    }: { 
-      repoId: string; 
-      prNumber: number; 
-      body: string; 
-      path: string; 
-      line: number; 
-      side: 'LEFT' | 'RIGHT'; 
+    mutationFn: async ({
+      repoId,
+      prNumber,
+      body,
+      path,
+      line,
+      side,
+      in_reply_to_id
+    }: {
+      repoId: string;
+      prNumber: number;
+      body: string;
+      path: string;
+      line: number;
+      side: 'LEFT' | 'RIGHT';
       in_reply_to_id?: string;
     }) => {
       const { data: { session } } = await supabase.auth.getSession();
@@ -326,4 +326,101 @@ export function useReviewInbox(projectId: string | undefined) {
   });
 }
 
+/**
+ * Hook para resolver thread de comentários
+ */
+export function useResolveThread() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      repoId,
+      prNumber,
+      threadId,
+      resolution,
+      reason
+    }: {
+      repoId: string;
+      prNumber: number;
+      threadId: string;
+      resolution: 'RESOLVED' | 'WONT_FIX';
+      reason?: string;
+    }) => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Not authenticated');
+
+      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/repos/${repoId}/pulls/${prNumber}/threads/${threadId}/resolve`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ resolution, reason }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to resolve thread');
+      }
+
+      return await response.json();
+    },
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['pr', variables.repoId, variables.prNumber] });
+      toast.success('Thread resolvida!');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Erro ao resolver thread');
+    },
+  });
+}
+
+/**
+ * Hook para adicionar reação a um comentário
+ */
+export function useAddReaction() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      repoId,
+      prNumber,
+      commentId,
+      reaction,
+      reason
+    }: {
+      repoId: string;
+      prNumber: number;
+      commentId: string;
+      reaction: 'like' | 'dislike' | 'contra';
+      reason?: string;
+    }) => {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) throw new Error('Not authenticated');
+
+      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/repos/${repoId}/pulls/${prNumber}/comments/${commentId}/reactions`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${session.access_token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ reaction, reason }),
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        throw new Error(error.error || 'Failed to add reaction');
+      }
+
+      return await response.json();
+    },
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['pr', variables.repoId, variables.prNumber] });
+      toast.success('Reação adicionada!');
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || 'Erro ao adicionar reação');
+    },
+  });
+}
 

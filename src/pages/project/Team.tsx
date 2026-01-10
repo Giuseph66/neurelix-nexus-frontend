@@ -39,8 +39,11 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Loader2, MoreHorizontal, UserMinus, Shield } from "lucide-react";
+import { Plus, Loader2, MoreHorizontal, UserMinus, Shield, X, Mail, Clock } from "lucide-react";
 import { usePageTitle } from "@/hooks/usePageTitle";
+import { useCreateInvite, useProjectInvites, useDeleteInvite } from "@/hooks/useProjectInvites";
+import { formatDistanceToNow } from "date-fns";
+import { ptBR } from "date-fns/locale";
 
 type AppRole = "admin" | "tech_lead" | "developer" | "viewer";
 
@@ -61,8 +64,14 @@ export default function Team() {
   const queryClient = useQueryClient();
 
   const [isInviteOpen, setIsInviteOpen] = useState(false);
+  const [isInvitesModalOpen, setIsInvitesModalOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
   const [inviteRole, setInviteRole] = useState<AppRole>("developer");
+
+  // Hooks para convites
+  const { data: invitesData } = useProjectInvites(projectId || undefined);
+  const createInviteMutation = useCreateInvite();
+  const deleteInviteMutation = useDeleteInvite();
 
   const { data: currentUserRole } = useQuery({
     queryKey: ["project-role", projectId],
@@ -172,7 +181,27 @@ export default function Team() {
     },
   });
 
-  const isAdmin = currentUserRole === "admin";
+  const canManageMembers = currentUserRole === "admin" || currentUserRole === "tech_lead";
+  const canInvite = canManageMembers;
+
+  const handleInvite = async () => {
+    if (!projectId || !inviteEmail.trim()) return;
+
+    createInviteMutation.mutate(
+      {
+        projectId,
+        email: inviteEmail.trim(),
+        role: inviteRole,
+      },
+      {
+        onSuccess: () => {
+          setInviteEmail("");
+          setInviteRole("developer");
+          setIsInviteOpen(false);
+        },
+      }
+    );
+  };
 
   const getRoleBadgeVariant = (role: AppRole) => {
     switch (role) {
@@ -210,59 +239,226 @@ export default function Team() {
           </p>
         </div>
 
-        {isAdmin && (
-          <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="mr-2 h-4 w-4" />
-                Convidar membro
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>Convidar membro</DialogTitle>
-                <DialogDescription>
-                  Adicione um novo membro ao projeto (funcionalidade em desenvolvimento)
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4 py-4">
-                <div className="space-y-2">
-                  <Label htmlFor="email">Email</Label>
-                  <Input
-                    id="email"
-                    type="email"
-                    placeholder="membro@email.com"
-                    value={inviteEmail}
-                    onChange={(e) => setInviteEmail(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="role">Papel</Label>
-                  <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as AppRole)}>
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="admin">Admin</SelectItem>
-                      <SelectItem value="tech_lead">Tech Lead</SelectItem>
-                      <SelectItem value="developer">Developer</SelectItem>
-                      <SelectItem value="viewer">Viewer</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setIsInviteOpen(false)}>
-                  Cancelar
+        {canInvite && (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setIsInvitesModalOpen(true)}
+            >
+              <Mail className="mr-2 h-4 w-4" />
+              Ver convites
+            </Button>
+            <Dialog open={isInviteOpen} onOpenChange={setIsInviteOpen}>
+              <DialogTrigger asChild>
+                <Button>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Convidar membro
                 </Button>
-                <Button disabled>
-                  Enviar convite
-                </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>Convidar membro</DialogTitle>
+                  <DialogDescription>
+                    Envie um convite por email para adicionar um novo membro ao projeto
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 py-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="email">Email</Label>
+                    <Input
+                      id="email"
+                      type="email"
+                      placeholder="membro@email.com"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && inviteEmail.trim()) {
+                          handleInvite();
+                        }
+                      }}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="role">Papel</Label>
+                    <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as AppRole)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="admin">Admin</SelectItem>
+                        <SelectItem value="tech_lead">Tech Lead</SelectItem>
+                        <SelectItem value="developer">Developer</SelectItem>
+                        <SelectItem value="viewer">Viewer</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setIsInviteOpen(false)}>
+                    Cancelar
+                  </Button>
+                  <Button
+                    onClick={handleInvite}
+                    disabled={!inviteEmail.trim() || createInviteMutation.isPending}
+                  >
+                    {createInviteMutation.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Enviando...
+                      </>
+                    ) : (
+                      <>
+                        <Mail className="mr-2 h-4 w-4" />
+                        Enviar convite
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
+            </Dialog>
+          </div>
         )}
       </div>
+
+      {/* Modal de convites ativos para copiar link */}
+      {canInvite && (
+        <Dialog open={isInvitesModalOpen} onOpenChange={setIsInvitesModalOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Convites ativos</DialogTitle>
+              <DialogDescription>
+                Veja todos os convites pendentes e copie o link de convite para compartilhar.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-4 max-h-[400px] overflow-y-auto space-y-3">
+              {invitesData?.invites && invitesData.invites.length > 0 ? (
+                invitesData.invites.map((invite) => (
+                  <div
+                    key={invite.id}
+                    className="flex items-center justify-between p-3 border rounded-lg"
+                  >
+                    <div className="flex items-center gap-3">
+                      <Mail className="h-4 w-4 text-muted-foreground" />
+                      <div>
+                        <div className="font-medium">{invite.email}</div>
+                        <div className="text-sm text-muted-foreground flex items-center gap-2">
+                          <Badge variant="outline" className="text-xs">
+                            {getRoleLabel(invite.role)}
+                          </Badge>
+                          <span className="flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {formatDistanceToNow(new Date(invite.expires_at), {
+                              addSuffix: true,
+                              locale: ptBR,
+                            })}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={async () => {
+                          try {
+                            const origin = window.location.origin;
+                            const acceptUrl = `${origin}/auth/accept-invite?token=${invite.token}`;
+                            await navigator.clipboard.writeText(acceptUrl);
+                            toast({
+                              title: "Link copiado",
+                              description: "O link do convite foi copiado para a área de transferência.",
+                            });
+                          } catch (error) {
+                            console.error("Erro ao copiar link:", error);
+                            toast({
+                              title: "Erro ao copiar link",
+                              description: "Não foi possível copiar o link do convite.",
+                              variant: "destructive",
+                            });
+                          }
+                        }}
+                      >
+                        Copiar link
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() =>
+                          deleteInviteMutation.mutate({
+                            inviteId: invite.id,
+                            projectId: projectId!,
+                          })
+                        }
+                        disabled={deleteInviteMutation.isPending}
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <p className="text-sm text-muted-foreground">
+                  Nenhum convite ativo no momento.
+                </p>
+              )}
+            </div>
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Convites Pendentes */}
+      {canInvite && invitesData?.invites && invitesData.invites.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Convites Pendentes</CardTitle>
+            <CardDescription>
+              {invitesData.invites.length} convite{invitesData.invites.length !== 1 ? "s" : ""} aguardando aceitação
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {invitesData.invites.map((invite) => (
+                <div
+                  key={invite.id}
+                  className="flex items-center justify-between p-3 border rounded-lg"
+                >
+                  <div className="flex items-center gap-3">
+                    <Mail className="h-4 w-4 text-muted-foreground" />
+                    <div>
+                      <div className="font-medium">{invite.email}</div>
+                      <div className="text-sm text-muted-foreground flex items-center gap-2">
+                        <Badge variant="outline" className="text-xs">
+                          {getRoleLabel(invite.role)}
+                        </Badge>
+                        <span className="flex items-center gap-1">
+                          <Clock className="h-3 w-3" />
+                          {formatDistanceToNow(new Date(invite.expires_at), {
+                            addSuffix: true,
+                            locale: ptBR,
+                          })}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    onClick={() =>
+                      deleteInviteMutation.mutate({
+                        inviteId: invite.id,
+                        projectId: projectId!,
+                      })
+                    }
+                    disabled={deleteInviteMutation.isPending}
+                  >
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -283,7 +479,7 @@ export default function Team() {
                   <TableHead>Nome</TableHead>
                   <TableHead>Papel</TableHead>
                   <TableHead>Desde</TableHead>
-                  {isAdmin && <TableHead className="w-[50px]"></TableHead>}
+                  {canManageMembers && <TableHead className="w-[50px]"></TableHead>}
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -310,7 +506,7 @@ export default function Team() {
                     <TableCell className="text-muted-foreground">
                       {new Date(member.created_at).toLocaleDateString("pt-BR")}
                     </TableCell>
-                    {isAdmin && (
+                    {canManageMembers && (
                       <TableCell>
                         {member.user_id !== user?.id && (
                           <DropdownMenu>
