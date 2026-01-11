@@ -17,6 +17,7 @@ import { tarefaRoutes } from './routes/tarefas.js';
 import { boardViewRoutes } from './routes/board-views.js';
 import { workflowRoutes } from './routes/workflows.js';
 import { sprintRoutes } from './routes/sprints.js';
+import { roleRoutes } from './routes/roles.js';
 
 const env = loadEnv();
 
@@ -75,6 +76,7 @@ await app.register(tarefaRoutes);
 await app.register(boardViewRoutes);
 await app.register(workflowRoutes);
 await app.register(sprintRoutes);
+await app.register(roleRoutes);
 
 declare module 'fastify' {
   interface FastifyInstance {

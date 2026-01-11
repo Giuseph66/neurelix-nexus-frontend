@@ -39,9 +39,23 @@ export function useTarefaGitLinks(tarefaId: string | undefined) {
     queryFn: async () => {
       if (!tarefaId) throw new Error('Tarefa ID is required');
 
-      return await apiFetch<TarefaGitLinksData>(`/functions/v1/git-links/tarefas/${tarefaId}`);
+      try {
+        return await apiFetch<TarefaGitLinksData>(`/functions/v1/git-links/tarefas/${tarefaId}`);
+      } catch (error: any) {
+        // Se for 404, retorna dados vazios (é normal não ter links Git)
+        if (error?.status === 404 || error?.response?.status === 404) {
+          return {
+            links: [],
+            whiteboardOrigin: null,
+          };
+        }
+        // Para outros erros, propaga
+        throw error;
+      }
     },
     enabled: !!tarefaId,
+    retry: false, // Não tenta novamente em caso de erro
+    refetchOnWindowFocus: false, // Não refaz a busca ao focar na janela
   });
 }
 

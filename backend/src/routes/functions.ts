@@ -44,6 +44,12 @@ Regras para geração:
 Para outras respostas, use texto normal formatado em markdown.`;
 
 const ANALYZE_SELECTION_PREFIX = '[ANALYZE_SELECTION]';
+const TASK_PLAN_TYPE = 'task_plan';
+const MAX_TASKS_PER_PLAN = 40;
+const DEFAULT_STATUS_COLORS = ['#6B7280', '#3B82F6', '#A855F7', '#F59E0B', '#10B981', '#EF4444'];
+
+const TASK_TYPES = new Set(['EPIC', 'TASK', 'SUBTASK', 'BUG', 'STORY']);
+const TASK_PRIORITIES = new Set(['LOWEST', 'LOW', 'MEDIUM', 'HIGH', 'HIGHEST']);
 
 function summarizeAnalyzeSelection(content: string): string {
   const match = content.match(/^\[ANALYZE_SELECTION\]\s*count=(\d+)/i);
@@ -52,6 +58,23 @@ function summarizeAnalyzeSelection(content: string): string {
     return `Enviei ${count} ${count === 1 ? 'elemento' : 'elementos'} para análise.`;
   }
   return 'Enviei elementos para análise.';
+}
+
+function normalizeLabel(value?: string): string {
+  return (value || '').trim().toLowerCase();
+}
+
+function extractJsonBlock(text: string): string | null {
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced && fenced[1]) return fenced[1].trim();
+  const match = text.match(/\{[\s\S]*"type"\s*:\s*"task_plan"[\s\S]*\}/i);
+  if (match && match[0]) return match[0];
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start !== -1 && end !== -1 && end > start) {
+    return text.slice(start, end + 1);
+  }
+  return null;
 }
 
 function convertMessagesToGeminiFormat(messages: any[]) {
@@ -109,6 +132,11 @@ export async function functionsRoutes(app: FastifyInstance) {
       [projectId, userId]
     );
     return (rows[0]?.role as any) ?? null;
+  }
+
+  async function ensureProjectAccess(projectId: string, userId: string): Promise<boolean> {
+    const role = await getProjectRole(projectId, userId);
+    return Boolean(role);
   }
 
   async function ensureWhiteboardAccess(whiteboardId: string, userId: string): Promise<boolean> {
@@ -172,7 +200,8 @@ export async function functionsRoutes(app: FastifyInstance) {
         .object({
           projectId: z.string().uuid(),
           email: z.string(),
-          role: z.enum(['admin', 'tech_lead', 'developer', 'viewer']).optional(),
+          role: z.enum(['admin', 'tech_lead', 'developer', 'viewer', 'custom']).optional(),
+          custom_role_name: z.string().nullable().optional(),
         })
         .parse(req.body);
 
@@ -201,11 +230,34 @@ export async function functionsRoutes(app: FastifyInstance) {
         return reply.code(400).send({ error: 'An active invite already exists for this email' });
       }
 
+      // Validate custom role if role is 'custom'
+      if (body.role === 'custom') {
+        if (!body.custom_role_name) {
+          return reply.code(400).send({ error: 'custom_role_name is required when role is custom' });
+        }
+        // Verify custom role exists in the project
+        const customRoleCheck = await app.db.query(
+          `SELECT 1 FROM public.custom_role_permissions 
+           WHERE project_id = $1 AND role_name = $2`,
+          [body.projectId, body.custom_role_name]
+        );
+        if (customRoleCheck.rows.length === 0) {
+          return reply.code(400).send({ error: 'Custom role not found in this project' });
+        }
+      }
+
       const { rows } = await app.db.query(
-        `INSERT INTO public.project_invites (project_id, email, role, invited_by, token, expires_at, created_at, updated_at)
-         VALUES ($1, $2, $3, $4, $5::uuid, now() + interval '7 days', now(), now())
+        `INSERT INTO public.project_invites (project_id, email, role, custom_role_name, invited_by, token, expires_at, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6::uuid, now() + interval '7 days', now(), now())
          RETURNING *`,
-        [body.projectId, email, body.role ?? 'developer', userId, crypto.randomUUID()]
+        [
+          body.projectId, 
+          email, 
+          body.role ?? 'developer', 
+          body.role === 'custom' ? body.custom_role_name : null,
+          userId, 
+          crypto.randomUUID()
+        ]
       );
 
       return reply.code(201).send({ invite: rows[0] });
@@ -250,11 +302,12 @@ export async function functionsRoutes(app: FastifyInstance) {
       id: string;
       project_id: string;
       email: string;
-      role: 'admin' | 'tech_lead' | 'developer' | 'viewer';
+      role: 'admin' | 'tech_lead' | 'developer' | 'viewer' | 'custom';
+      custom_role_name: string | null;
       expires_at: string;
       accepted_at: string | null;
     }>(
-      `SELECT id, project_id, email, role::text as role, expires_at, accepted_at
+      `SELECT id, project_id, email, role::text as role, custom_role_name, expires_at, accepted_at
        FROM public.project_invites
        WHERE token = $1::uuid
        LIMIT 1`,
@@ -294,6 +347,7 @@ export async function functionsRoutes(app: FastifyInstance) {
           project_id: invite.project_id,
           email: invite.email,
           role: invite.role,
+          custom_role_name: invite.custom_role_name,
           expires_at: invite.expires_at,
           accepted_at: invite.accepted_at,
         },
@@ -322,9 +376,9 @@ export async function functionsRoutes(app: FastifyInstance) {
 
       if (existingMember.rows.length === 0) {
         await client.query(
-          `INSERT INTO public.project_members (project_id, user_id, role, created_at)
-           VALUES ($1, $2, $3, now())`,
-          [invite.project_id, authedUserId, invite.role]
+          `INSERT INTO public.project_members (project_id, user_id, role, custom_role_name, created_at)
+           VALUES ($1, $2, $3, $4, now())`,
+          [invite.project_id, authedUserId, invite.role, invite.custom_role_name || null]
         );
       }
 
@@ -2836,7 +2890,7 @@ export async function functionsRoutes(app: FastifyInstance) {
     '/functions/v1/bear-assistant',
     { preHandler: [app.authenticate] },
     async (req: FastifyRequest, reply: FastifyReply) => {
-      const { messages, action, whiteboardId, sessionId } = z.object({
+      const { messages, action, whiteboardId, sessionId, projectId } = z.object({
         messages: z.array(z.object({
           role: z.enum(['user', 'assistant', 'system']),
           content: z.string(),
@@ -2844,6 +2898,7 @@ export async function functionsRoutes(app: FastifyInstance) {
         action: z.string().optional(),
         whiteboardId: z.string().uuid().optional(),
         sessionId: z.string().uuid().optional(),
+        projectId: z.string().uuid().optional(),
       }).parse(req.body);
 
       const GEMINI_API_KEY = app.env.GEMINI_API_KEY;
@@ -2857,6 +2912,7 @@ export async function functionsRoutes(app: FastifyInstance) {
       const isFlowRequest =
         action === "suggest_flow" ||
         (action !== "analyze_selection" &&
+          action !== "create_tasks" &&
           (lastUserMessage.includes("fluxo") ||
             lastUserMessage.includes("processo") ||
             lastUserMessage.includes("diagrama") ||
@@ -2872,6 +2928,37 @@ export async function functionsRoutes(app: FastifyInstance) {
         systemInstructions += "\n\nO usuário está digitando. Complete a frase ou parágrafo de forma natural e curta. Responda APENAS com o texto de completamento, sem explicações.";
       } else if (action === "analyze_selection") {
         systemInstructions += "\n\nO usuário enviou elementos selecionados do quadro em JSON. Responda com um resumo do que foi desenhado, contexto e possíveis insights. Não gere novos elementos e não responda com JSON.";
+      } else if (action === "create_tasks") {
+        systemInstructions += `
+
+O usuário quer criar tarefas e/ou um board novo.
+Responda APENAS com JSON no formato:
+{
+  "type": "task_plan",
+  "board": {
+    "mode": "existing" | "new",
+    "id": "board_id_se_existente",
+    "name": "Nome do board (se novo)",
+    "type": "KANBAN" | "SCRUM",
+    "columns": ["To Do", "In Progress", "Done"]
+  },
+  "tasks": [
+    {
+      "title": "Título curto",
+      "description": "Descrição opcional",
+      "type": "TASK",
+      "priority": "MEDIUM",
+      "column": "To Do"
+    }
+  ]
+}
+
+Regras:
+- Se escolher um board existente, use o id fornecido na lista de boards.
+- Se não houver board adequado, crie um novo (mode: "new") e defina colunas.
+- Não atribua responsável, prazo ou horas estimadas.
+- Gere no máximo ${MAX_TASKS_PER_PLAN} tarefas.
+`;
       }
 
       if (isFlowRequest) {
@@ -2904,6 +2991,80 @@ Exemplo de Fluxo de Compra:
   ]
 }
 `;
+      }
+
+      const userId = (req.user as any)?.userId as string | undefined;
+
+      if (action === 'create_tasks') {
+        if (!projectId) {
+          return reply.code(400).send({ error: 'projectId is required for create_tasks' });
+        }
+
+        if (!userId) {
+          return reply.code(401).send({ error: 'Unauthorized' });
+        }
+
+        const hasProjectAccess = await ensureProjectAccess(projectId, userId);
+        if (!hasProjectAccess) return reply.code(403).send({ error: 'Access denied' });
+
+        const boardsResult = await app.db.query(
+          `SELECT b.id, b.name, b.type
+           FROM boards b
+           INNER JOIN project_members pm ON pm.project_id = b.project_id
+           WHERE b.project_id = $1 AND pm.user_id = $2
+           ORDER BY b.created_at DESC
+           LIMIT 10`,
+          [projectId, userId]
+        );
+
+        const boards = boardsResult.rows;
+        const boardIds = boards.map((b: any) => b.id);
+
+        const workflowsByBoard = new Map<string, string>();
+        const workflowBoardMap = new Map<string, string>();
+        const statusesByBoard = new Map<string, { name: string; position: number }[]>();
+
+        if (boardIds.length > 0) {
+          const workflowRows = await app.db.query(
+            `SELECT id, board_id FROM workflows WHERE is_default = true AND board_id = ANY($1::uuid[])`,
+            [boardIds]
+          );
+
+          workflowRows.rows.forEach((row: any) => {
+            workflowsByBoard.set(row.board_id, row.id);
+            workflowBoardMap.set(row.id, row.board_id);
+          });
+
+          const workflowIds = Array.from(workflowsByBoard.values());
+          if (workflowIds.length > 0) {
+            const statusRows = await app.db.query(
+              `SELECT workflow_id, name, position
+               FROM workflow_statuses
+               WHERE workflow_id = ANY($1::uuid[])
+               ORDER BY position ASC`,
+              [workflowIds]
+            );
+
+            statusRows.rows.forEach((row: any) => {
+              const boardId = workflowBoardMap.get(row.workflow_id);
+              if (!boardId) return;
+              const list = statusesByBoard.get(boardId) ?? [];
+              list.push({ name: row.name, position: row.position });
+              statusesByBoard.set(boardId, list);
+            });
+          }
+        }
+
+        const boardContext = boards.map((board: any) => ({
+          id: board.id,
+          name: board.name,
+          type: board.type,
+          columns: (statusesByBoard.get(board.id) ?? [])
+            .sort((a, b) => a.position - b.position)
+            .map((s) => s.name),
+        }));
+
+        systemInstructions += `\n\nBoards disponíveis (use o id para escolher um existente):\n${JSON.stringify(boardContext, null, 2)}`;
       }
 
       // Construir texto final combinando system prompt e mensagens
@@ -3018,8 +3179,7 @@ Exemplo de Fluxo de Compra:
           result = fallbackResult;
         }
 
-        const generatedText = result.text;
-        const userId = (req.user as any)?.userId as string | undefined;
+        let generatedText = result.text;
         const shouldStore = action !== 'autocomplete' && userId && whiteboardId;
         let effectiveSessionId = sessionId;
 
@@ -3055,6 +3215,342 @@ Exemplo de Fluxo de Compra:
               effectiveSessionId = createdRows[0]?.id;
             }
           }
+        }
+
+        if (action === 'create_tasks') {
+          if (!projectId) {
+            return reply.code(400).send({ error: 'projectId is required for create_tasks' });
+          }
+
+          if (!userId) {
+            return reply.code(401).send({ error: 'Unauthorized' });
+          }
+
+          const hasProjectAccess = await ensureProjectAccess(projectId, userId);
+          if (!hasProjectAccess) return reply.code(403).send({ error: 'Access denied' });
+
+          const jsonBlock = extractJsonBlock(generatedText);
+          if (!jsonBlock) {
+            return reply.code(422).send({
+              error: 'Não foi possível interpretar a resposta da IA. Tente novamente com menos ambiguidade.',
+            });
+          }
+
+          let plan: any;
+          try {
+            plan = JSON.parse(jsonBlock);
+          } catch (err) {
+            return reply.code(422).send({
+              error: 'Resposta da IA inválida. Tente novamente com menos ambiguidade.',
+            });
+          }
+
+          if (!plan || plan.type !== TASK_PLAN_TYPE || !Array.isArray(plan.tasks)) {
+            return reply.code(422).send({
+              error: 'Formato de plano inválido. Tente novamente.',
+            });
+          }
+
+          const tasks = plan.tasks
+            .filter((t: any) => t && typeof t.title === 'string' && t.title.trim())
+            .slice(0, MAX_TASKS_PER_PLAN);
+
+          if (tasks.length === 0) {
+            return reply.code(422).send({ error: 'Nenhuma tarefa válida encontrada no plano.' });
+          }
+
+          const boardMode = plan.board?.mode === 'existing' || plan.board?.mode === 'new'
+            ? plan.board.mode
+            : plan.board?.id
+              ? 'existing'
+              : 'new';
+
+          let targetBoardId: string | null = null;
+          let targetBoardName: string | null = null;
+          const boardListResult = await app.db.query(
+            `SELECT id, name, type FROM boards WHERE project_id = $1`,
+            [projectId]
+          );
+          const boards = boardListResult.rows;
+
+          const findBoardByName = (name?: string) => {
+            if (!name) return null;
+            const normalized = normalizeLabel(name);
+            return boards.find((b: any) => normalizeLabel(b.name) === normalized) ?? null;
+          };
+
+          if (boardMode === 'existing' && plan.board?.id) {
+            const board = boards.find((b: any) => b.id === plan.board.id);
+            if (board) {
+              targetBoardId = board.id;
+              targetBoardName = board.name;
+            }
+          }
+
+          if (!targetBoardId && boardMode === 'existing') {
+            const boardByName = findBoardByName(plan.board?.name);
+            if (boardByName) {
+              targetBoardId = boardByName.id;
+              targetBoardName = boardByName.name;
+            }
+          }
+
+          if (!targetBoardId && boardMode === 'existing' && boards.length > 0) {
+            targetBoardId = boards[0].id;
+            targetBoardName = boards[0].name;
+          }
+
+          const ensureWorkflowAndStatuses = async (boardId: string) => {
+            const workflowResult = await app.db.query(
+              `SELECT id FROM workflows WHERE board_id = $1 AND is_default = true LIMIT 1`,
+              [boardId]
+            );
+            if (workflowResult.rows.length === 0) {
+              throw new Error('Workflow não encontrado para o board');
+            }
+            const wfId = workflowResult.rows[0].id as string;
+            const statusResult = await app.db.query(
+              `SELECT id, name, position, is_initial, is_final
+               FROM workflow_statuses
+               WHERE workflow_id = $1
+               ORDER BY position ASC`,
+              [wfId]
+            );
+            return { workflowId: wfId, statuses: statusResult.rows };
+          };
+
+          const createBoardWithWorkflow = async (
+            name: string,
+            type: string,
+            columns?: string[]
+          ) => {
+            const boardResult = await app.db.query(
+              `INSERT INTO boards (project_id, name, description, type, created_by)
+               VALUES ($1, $2, $3, $4, $5)
+               RETURNING id, name`,
+              [projectId, name, null, type, userId]
+            );
+            const board = boardResult.rows[0];
+
+            const workflowResult = await app.db.query(
+              `INSERT INTO workflows (board_id, name, is_default)
+               VALUES ($1, 'Default Workflow', true)
+               RETURNING id`,
+              [board.id]
+            );
+            const wfId = workflowResult.rows[0].id as string;
+
+            const defaultColumns = ['To Do', 'In Progress', 'Done'];
+            const rawColumns = Array.isArray(columns) && columns.length > 0 ? columns : defaultColumns;
+            const uniqueColumns: string[] = [];
+            rawColumns.forEach((col: any) => {
+              const trimmed = typeof col === 'string' ? col.trim() : '';
+              if (!trimmed) return;
+              if (!uniqueColumns.some((c) => normalizeLabel(c) === normalizeLabel(trimmed))) {
+                uniqueColumns.push(trimmed);
+              }
+            });
+
+            const statusRows: { id: string; name: string; position: number; is_initial: boolean; is_final: boolean }[] = [];
+            for (let i = 0; i < uniqueColumns.length; i++) {
+              const statusName = uniqueColumns[i];
+              const color = DEFAULT_STATUS_COLORS[i % DEFAULT_STATUS_COLORS.length];
+              const { rows } = await app.db.query(
+                `INSERT INTO workflow_statuses (workflow_id, name, color, position, is_initial, is_final)
+                 VALUES ($1, $2, $3, $4, $5, $6)
+                 RETURNING id, name, position, is_initial, is_final`,
+                [wfId, statusName, color, i, i === 0, i === uniqueColumns.length - 1]
+              );
+              statusRows.push(rows[0]);
+            }
+
+            for (let i = 0; i < statusRows.length - 1; i++) {
+              await app.db.query(
+                `INSERT INTO workflow_transitions (workflow_id, from_status_id, to_status_id)
+                 VALUES ($1, $2, $3)`,
+                [wfId, statusRows[i].id, statusRows[i + 1].id]
+              );
+            }
+
+            return { boardId: board.id, boardName: board.name, workflowId: wfId, statuses: statusRows };
+          };
+
+          let workflowData: { boardId: string; boardName: string; workflowId: string; statuses: any[] };
+
+          if (!targetBoardId) {
+            const boardName = (typeof plan.board?.name === 'string' && plan.board.name.trim())
+              ? plan.board.name.trim()
+              : `Board IA ${new Date().toLocaleDateString('pt-BR')}`;
+            const boardType = plan.board?.type === 'SCRUM' ? 'SCRUM' : 'KANBAN';
+            workflowData = await createBoardWithWorkflow(boardName, boardType, plan.board?.columns);
+            targetBoardId = workflowData.boardId;
+            targetBoardName = workflowData.boardName;
+          } else {
+            const data = await ensureWorkflowAndStatuses(targetBoardId);
+            const existingStatuses = data.statuses as any[];
+
+            const desiredColumns: string[] = [];
+            if (Array.isArray(plan.board?.columns)) {
+              plan.board.columns.forEach((col: any) => {
+                if (typeof col === 'string' && col.trim()) {
+                  if (!desiredColumns.some((c) => normalizeLabel(c) === normalizeLabel(col))) {
+                    desiredColumns.push(col.trim());
+                  }
+                }
+              });
+            }
+            tasks.forEach((task: any) => {
+              if (typeof task.column === 'string' && task.column.trim()) {
+                if (!desiredColumns.some((c) => normalizeLabel(c) === normalizeLabel(task.column))) {
+                  desiredColumns.push(task.column.trim());
+                }
+              }
+            });
+
+            let maxPosition = existingStatuses.reduce((max, s) => Math.max(max, s.position), -1);
+            const existingNames = new Set(existingStatuses.map((s) => normalizeLabel(s.name)));
+
+            const createdStatuses: any[] = [];
+            for (let i = 0; i < desiredColumns.length; i++) {
+              const column = desiredColumns[i];
+              if (existingNames.has(normalizeLabel(column))) continue;
+              maxPosition += 1;
+              const color = DEFAULT_STATUS_COLORS[maxPosition % DEFAULT_STATUS_COLORS.length];
+              const { rows } = await app.db.query(
+                `INSERT INTO workflow_statuses (workflow_id, name, color, position, is_initial, is_final)
+                 VALUES ($1, $2, $3, $4, false, false)
+                 RETURNING id, name, position, is_initial, is_final`,
+                [data.workflowId, column, color, maxPosition]
+              );
+              createdStatuses.push(rows[0]);
+              existingNames.add(normalizeLabel(column));
+            }
+
+            const statuses = [...existingStatuses, ...createdStatuses]
+              .sort((a, b) => a.position - b.position);
+
+            const transitionsResult = await app.db.query(
+              `SELECT from_status_id, to_status_id FROM workflow_transitions WHERE workflow_id = $1`,
+              [data.workflowId]
+            );
+            const transitionSet = new Set(
+              transitionsResult.rows.map((t: any) => `${t.from_status_id}:${t.to_status_id}`)
+            );
+
+            for (let i = 0; i < statuses.length - 1; i++) {
+              const from = statuses[i].id;
+              const to = statuses[i + 1].id;
+              const key = `${from}:${to}`;
+              if (transitionSet.has(key)) continue;
+              await app.db.query(
+                `INSERT INTO workflow_transitions (workflow_id, from_status_id, to_status_id)
+                 VALUES ($1, $2, $3)`,
+                [data.workflowId, from, to]
+              );
+              transitionSet.add(key);
+            }
+
+            workflowData = {
+              boardId: targetBoardId,
+              boardName: targetBoardName ?? 'Board',
+              workflowId: data.workflowId,
+              statuses,
+            };
+          }
+
+          const statusMap = new Map<string, any>();
+          workflowData.statuses.forEach((status: any) => {
+            statusMap.set(normalizeLabel(status.name), status);
+          });
+          const initialStatus = workflowData.statuses.find((s: any) => s.is_initial) ?? workflowData.statuses[0];
+
+          const createTask = async (task: any) => {
+            const title = String(task.title || '').trim().slice(0, 180);
+            const description = typeof task.description === 'string' ? task.description.trim() : null;
+            const type = TASK_TYPES.has(String(task.type).toUpperCase())
+              ? String(task.type).toUpperCase()
+              : 'TASK';
+            const priority = TASK_PRIORITIES.has(String(task.priority).toUpperCase())
+              ? String(task.priority).toUpperCase()
+              : 'MEDIUM';
+            const columnName = typeof task.column === 'string' ? task.column : '';
+            const status = columnName
+              ? statusMap.get(normalizeLabel(columnName))
+              : initialStatus;
+
+            const seqResult = await app.db.query(
+              `
+              WITH seq AS (
+                INSERT INTO public.project_sequences (project_id, last_sequence)
+                VALUES ($1, 1)
+                ON CONFLICT (project_id)
+                DO UPDATE SET last_sequence = public.project_sequences.last_sequence + 1
+                RETURNING last_sequence
+              )
+              SELECT p.slug, seq.last_sequence
+              FROM seq
+              INNER JOIN public.projects p ON p.id = $1
+              `,
+              [projectId]
+            );
+
+            if (seqResult.rows.length === 0) {
+              throw new Error('Project not found');
+            }
+
+            const slug = String(seqResult.rows[0].slug || 'PROJ');
+            const nextNum = Number(seqResult.rows[0].last_sequence) || 1;
+            const key = `${slug.toUpperCase()}-${nextNum}`;
+
+            const tarefaResult = await app.db.query(
+              `INSERT INTO tarefas (
+                project_id, board_id, key, type, title, description, status_id,
+                priority, assignee_id, reporter_id, labels
+              ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+              RETURNING id, key, title, status_id`,
+              [
+                projectId,
+                workflowData.boardId,
+                key,
+                type,
+                title,
+                description || null,
+                status?.id || null,
+                priority,
+                null,
+                userId,
+                Array.isArray(task.labels) ? task.labels : [],
+              ]
+            );
+
+            const tarefa = tarefaResult.rows[0];
+
+            await app.db.query(
+              `INSERT INTO tarefa_activity_log (tarefa_id, user_id, action, new_value)
+               VALUES ($1, $2, 'created', $3)`,
+              [tarefa.id, userId, title]
+            );
+
+            return {
+              id: tarefa.id,
+              key: tarefa.key,
+              title: tarefa.title,
+              status_id: tarefa.status_id,
+            };
+          };
+
+          const createdTasks = [];
+          for (const task of tasks) {
+            createdTasks.push(await createTask(task));
+          }
+
+          const createdColumns = plan.board?.columns?.length
+            ? plan.board.columns.join(', ')
+            : null;
+
+          const boardLabel = workflowData.boardName || targetBoardName || 'board';
+          generatedText = `Criei ${createdTasks.length} ${createdTasks.length === 1 ? 'tarefa' : 'tarefas'} no board "${boardLabel}".` +
+            (createdColumns ? ` Colunas usadas/criadas: ${createdColumns}.` : '');
         }
 
         if (shouldStore && userId && whiteboardId && effectiveSessionId) {

@@ -12,7 +12,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
-import { Plus, Search, GripVertical, Zap, Bug, CheckSquare, BookOpen, Circle } from 'lucide-react';
+import { Plus, Search, GripVertical, Zap } from 'lucide-react';
 import type { Tarefa } from '@/types/tarefas';
 import { PRIORITY_CONFIG, TYPE_CONFIG } from '@/types/tarefas';
 
@@ -55,11 +55,8 @@ function BacklogItem({ tarefa, onClick, epics }: BacklogItemProps & { epics: Tar
   const priorityConfig = PRIORITY_CONFIG[tarefa.priority];
   const epic = tarefa.epic_id ? epics.find(e => e.id === tarefa.epic_id) : null;
 
-  const TypeIcon = tarefa.type === 'BUG' ? Bug : 
-                   tarefa.type === 'EPIC' ? Zap :
-                   tarefa.type === 'STORY' ? BookOpen :
-                   tarefa.type === 'SUBTASK' ? Circle :
-                   CheckSquare;
+  const TypeIcon = typeConfig.icon;
+  const PriorityIcon = priorityConfig.icon;
 
   return (
     <div
@@ -95,13 +92,20 @@ function BacklogItem({ tarefa, onClick, epics }: BacklogItemProps & { epics: Tar
         </Badge>
       )}
 
-      <Badge 
-        variant="outline" 
-        className="text-xs"
-        style={{ borderColor: priorityConfig.color, color: priorityConfig.color }}
-      >
-        {priorityConfig.label}
-      </Badge>
+      <div className="flex items-center gap-2">
+        <PriorityIcon 
+          className="h-4 w-4" 
+          style={{ color: priorityConfig.color }} 
+          title={`Prioridade: ${priorityConfig.label}`}
+        />
+        <Badge 
+          variant="outline" 
+          className="text-[10px] h-5 px-1.5"
+          style={{ borderColor: priorityConfig.color + '40', color: priorityConfig.color }}
+        >
+          {priorityConfig.label}
+        </Badge>
+      </div>
     </div>
   );
 }

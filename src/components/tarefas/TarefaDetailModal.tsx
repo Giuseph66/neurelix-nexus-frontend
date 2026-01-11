@@ -196,9 +196,10 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
             {/* Header */}
             <DialogHeader className="p-6 pb-0">
               <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-                <span>{typeConfig?.icon}</span>
+                {typeConfig && <typeConfig.icon className="h-4 w-4" style={{ color: typeConfig.color }} />}
                 <span className="font-mono font-medium">{tarefa.key}</span>
-                <Badge variant="outline" style={{ borderColor: priorityConfig?.color, color: priorityConfig?.color }}>
+                <Badge variant="outline" className="flex items-center gap-1.5" style={{ borderColor: priorityConfig?.color + '40', color: priorityConfig?.color, backgroundColor: priorityConfig?.color + '10' }}>
+                  {priorityConfig && <priorityConfig.icon className="h-3.5 w-3.5" />}
                   {priorityConfig?.label}
                 </Badge>
                 {tarefa.status && (
@@ -647,7 +648,7 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
                                 borderColor: typeConfig.color
                               } : {}}
                             >
-                              {isType && typeConfig ? `${typeConfig.icon} ` : ''}
+                              {isType && typeConfig && <typeConfig.icon className="h-3 w-3" />}
                               {label}
                               <button
                                 type="button"
@@ -689,13 +690,14 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
                             const typeKey = type as TarefaType;
                             const config = TYPE_CONFIG[typeKey];
                             const isSelected = editedLabels.includes(type);
+                            const Icon = config.icon;
                             return (
                               <Button
                                 key={type}
                                 type="button"
                                 size="sm"
                                 variant={isSelected ? "default" : "outline"}
-                                className="h-6 text-xs"
+                                className="h-7 text-xs gap-1.5"
                                 style={isSelected ? { backgroundColor: config.color, color: 'white' } : {}}
                                 onClick={() => {
                                   if (isSelected) {
@@ -708,7 +710,7 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
                                   }
                                 }}
                               >
-                                {config.icon} {config.label}
+                                <Icon className="h-3 w-3" /> {config.label}
                               </Button>
                             );
                           })}
@@ -724,14 +726,15 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
                         {tarefa.type && (
                           <Badge 
                             variant="default" 
-                            className="text-xs"
+                            className="text-xs flex items-center gap-1.5"
                             style={{ 
                               backgroundColor: typeConfig?.color,
                               color: 'white',
                               borderColor: typeConfig?.color
                             }}
                           >
-                            {typeConfig?.icon} {typeConfig?.label}
+                            {typeConfig && <typeConfig.icon className="h-3.5 w-3.5" />}
+                            {typeConfig?.label}
                           </Badge>
                         )}
                         {tarefa.labels?.filter(l => !['EPIC', 'STORY', 'TASK', 'SUBTASK', 'BUG'].includes(l.toUpperCase())).map(label => (
@@ -778,19 +781,38 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
                   <h4 className="text-xs font-medium text-muted-foreground mb-2">Prioridade</h4>
                   {isEditing ? (
                     <Select value={String(editedPriority)} onValueChange={(v) => setEditedPriority(v as any)}>
-                      <SelectTrigger className="h-9">
-                        <SelectValue />
+                      <SelectTrigger className="h-9 flex items-center gap-2">
+                        {editedPriority && (() => {
+                          const config = PRIORITY_CONFIG[editedPriority];
+                          const Icon = config.icon;
+                          return (
+                            <>
+                              <Icon className="h-4 w-4 flex-shrink-0" style={{ color: config.color }} />
+                              <SelectValue>{config.label}</SelectValue>
+                            </>
+                          );
+                        })()}
                       </SelectTrigger>
                       <SelectContent>
-                        {Object.keys(PRIORITY_CONFIG).map((k) => (
-                          <SelectItem key={k} value={k}>
-                            {PRIORITY_CONFIG[k as any].label}
-                          </SelectItem>
-                        ))}
+                        {Object.keys(PRIORITY_CONFIG).map((k) => {
+                          const config = PRIORITY_CONFIG[k as any];
+                          return (
+                            <SelectItem key={k} value={k}>
+                              {config.label}
+                            </SelectItem>
+                          );
+                        })}
                       </SelectContent>
                     </Select>
                   ) : (
-                    <span className="text-sm">{priorityConfig?.label}</span>
+                    <div className="flex items-center gap-2">
+                      {priorityConfig && (
+                        <>
+                          <priorityConfig.icon className="h-4 w-4" style={{ color: priorityConfig.color }} />
+                          <span className="text-sm">{priorityConfig.label}</span>
+                        </>
+                      )}
+                    </div>
                   )}
                 </div>
 

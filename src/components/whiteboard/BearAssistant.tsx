@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { X, Send, Sparkles, Lightbulb, FileText, Shapes, Loader2, Plus, History, Check, Pencil } from "lucide-react";
+import { X, Send, Sparkles, Lightbulb, FileText, Shapes, Loader2, Plus, History, Check, Pencil, ListTodo } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -48,6 +48,7 @@ interface BearAssistantProps {
   onCreateElements?: (elements: any[]) => void;
   activeTool?: ToolType;
   whiteboardId?: string;
+  projectId?: string;
   analysisRequest?: BearAssistantAnalysisRequest;
   onAnalysisHandled?: (id: string) => void;
 }
@@ -79,6 +80,7 @@ export function BearAssistant({
   onCreateElements,
   activeTool = 'select',
   whiteboardId,
+  projectId,
   analysisRequest,
   onAnalysisHandled,
 }: BearAssistantProps) {
@@ -247,6 +249,7 @@ export function BearAssistant({
         messages: userMessages,
         action,
         whiteboardId,
+        projectId,
         sessionId: (sessionIdOverride ?? activeSessionId) || undefined,
       },
       auth: true, // Bear assistant requer autenticação
@@ -283,7 +286,7 @@ export function BearAssistant({
     }
 
     return assistantContent;
-  }, [onCreateElements, whiteboardId, activeSessionId]);
+  }, [onCreateElements, whiteboardId, projectId, activeSessionId]);
 
   const createSession = useCallback(async (title?: string) => {
     if (!whiteboardId) return;
@@ -442,6 +445,13 @@ export function BearAssistant({
     const messageText = input.trim();
     if (!messageText && !action) return;
     if (whiteboardId && !activeSessionId) return;
+    if (action === 'create_tasks' && !projectId) {
+      setMessages(prev => [
+        ...prev,
+        { role: "assistant", content: "Projeto não identificado. Abra o quadro a partir de um projeto para criar tarefas." }
+      ]);
+      return;
+    }
 
     const userMessage: Message = { role: "user", content: messageText || action || "" };
     const newMessages = [...messages, userMessage];
@@ -483,6 +493,7 @@ export function BearAssistant({
     { icon: Lightbulb, label: "Gerar ideias", action: "generate_ideas", prompt: "Gere ideias criativas para meu projeto" },
     { icon: FileText, label: "Resumir", action: "summarize", prompt: "Resuma o conteúdo atual do board" },
     { icon: Shapes, label: "Criar elementos", action: "create_elements", prompt: "Crie elementos visuais para organizar minhas ideias" },
+    { icon: ListTodo, label: "Criar tarefas", action: "create_tasks", prompt: "Crie tarefas com base no que descrevi. Se fizer sentido, crie um novo board e colunas para organizar as tarefas." },
   ];
 
   const activeSessionTitle =

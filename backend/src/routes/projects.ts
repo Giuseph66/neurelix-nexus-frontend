@@ -18,7 +18,7 @@ function slugify(name: string) {
 }
 
 export async function projectRoutes(app: FastifyInstance) {
-  async function getRoleForUser(projectId: string, userId: string): Promise<'admin' | 'tech_lead' | 'developer' | 'viewer' | null> {
+  async function getRoleForUser(projectId: string, userId: string): Promise<'admin' | 'tech_lead' | 'developer' | 'viewer' | 'custom' | null> {
     // Creator is admin by definition
     const creator = await app.db.query<{ created_by: string | null }>(
       'SELECT created_by FROM public.projects WHERE id = $1',
@@ -92,27 +92,64 @@ export async function projectRoutes(app: FastifyInstance) {
     '/projects/:projectId/members',
     { preHandler: [app.authenticate] },
     async (req: FastifyRequest, reply: FastifyReply) => {
-      const userId = (req.user as any)?.userId as string;
-      if (!userId) return reply.code(401).send({ error: 'Unauthorized' });
-      const projectId = (req.params as any).projectId as string;
+      try {
+        const userId = (req.user as any)?.userId as string;
+        if (!userId) return reply.code(401).send({ error: 'Unauthorized' });
+        
+        const projectId = (req.params as any).projectId as string;
+        if (!projectId) return reply.code(400).send({ error: 'Project ID is required' });
 
-      const role = await getRoleForUser(projectId, userId);
-      if (!role) return reply.code(403).send({ error: 'Forbidden' });
+        const role = await getRoleForUser(projectId, userId);
+        if (!role) return reply.code(403).send({ error: 'Forbidden' });
 
-      const { rows } = await app.db.query(
-        `SELECT pm.id, pm.role, pm.user_id, pm.created_at,
+        const { rows } = await app.db.query(
+          `SELECT 
+            pm.id, 
+            pm.role, 
+            pm.user_id, 
+            pm.created_at, 
+            pm.custom_role_name,
+            CASE 
+              WHEN pr.user_id IS NOT NULL THEN
                 jsonb_build_object(
                   'id', pr.user_id,
                   'full_name', pr.full_name,
                   'avatar_url', pr.avatar_url
-                ) as profiles
-         FROM public.project_members pm
-         LEFT JOIN public.profiles pr ON pr.user_id = pm.user_id
-         WHERE pm.project_id = $1
-         ORDER BY pm.created_at ASC`,
-        [projectId]
-      );
-      return reply.send({ members: rows });
+                )
+              ELSE NULL
+            END as profiles
+           FROM public.project_members pm
+           LEFT JOIN public.profiles pr ON pr.user_id = pm.user_id
+           WHERE pm.project_id = $1
+           ORDER BY pm.created_at ASC`,
+          [projectId]
+        );
+
+        // Parse profiles JSON if it's a string
+        const members = rows.map((row: any) => {
+          let profiles = row.profiles;
+          if (typeof profiles === 'string') {
+            try {
+              profiles = JSON.parse(profiles);
+            } catch {
+              profiles = null;
+            }
+          }
+          // If profiles is null or empty object, set to null
+          if (!profiles || !profiles.id) {
+            profiles = null;
+          }
+          return {
+            ...row,
+            profiles,
+          };
+        });
+
+        return reply.send({ members });
+      } catch (error: any) {
+        app.log.error({ err: error, projectId: (req.params as any)?.projectId }, 'Error fetching project members');
+        return reply.code(500).send({ error: 'Internal server error', message: error.message });
+      }
     }
   );
 
@@ -195,11 +232,19 @@ export async function projectRoutes(app: FastifyInstance) {
       if (!userId) return reply.code(401).send({ error: 'Unauthorized' });
       const projectId = (req.params as any).projectId as string;
       const memberId = (req.params as any).memberId as string;
-      const { role: newRole } = req.body as { role: string };
+      const { role: newRole, custom_role_name } = req.body as { role: string; custom_role_name?: string | null };
 
-      if (!['admin', 'tech_lead', 'developer', 'viewer'].includes(newRole)) {
+      if (!['admin', 'tech_lead', 'developer', 'viewer', 'custom'].includes(newRole)) {
         return reply.code(400).send({ error: 'Invalid role' });
       }
+
+      // Se role é custom, custom_role_name é obrigatório
+      if (newRole === 'custom' && !custom_role_name) {
+        return reply.code(400).send({ error: 'custom_role_name é obrigatório quando role é custom' });
+      }
+
+      // Se role não é custom, custom_role_name deve ser null
+      const finalCustomRoleName = newRole === 'custom' ? custom_role_name : null;
 
       const role = await getRoleForUser(projectId, userId);
       if (role !== 'admin' && role !== 'tech_lead') {
@@ -216,13 +261,24 @@ export async function projectRoutes(app: FastifyInstance) {
         return reply.code(404).send({ error: 'Member not found' });
       }
 
+      // Verificar se custom_role_name existe (se for custom)
+      if (newRole === 'custom' && finalCustomRoleName) {
+        const customRoleCheck = await app.db.query(
+          'SELECT id FROM public.custom_role_permissions WHERE project_id = $1 AND role_name = $2',
+          [projectId, finalCustomRoleName]
+        );
+        if (customRoleCheck.rows.length === 0) {
+          return reply.code(404).send({ error: 'Role customizado não encontrado neste projeto' });
+        }
+      }
+
       // Update role
       const { rows } = await app.db.query(
         `UPDATE public.project_members 
-         SET role = $1 
-         WHERE id = $2 AND project_id = $3
-         RETURNING id, role, user_id, created_at`,
-        [newRole, memberId, projectId]
+         SET role = $1, custom_role_name = $2
+         WHERE id = $3 AND project_id = $4
+         RETURNING id, role, user_id, created_at, custom_role_name`,
+        [newRole, finalCustomRoleName, memberId, projectId]
       );
 
       return reply.send(rows[0]);

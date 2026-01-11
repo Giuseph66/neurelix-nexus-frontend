@@ -698,6 +698,7 @@ export default function Whiteboard() {
           onCreateElements={handleCreateElementsFromAI}
           activeTool={activeTool}
           whiteboardId={selectedWhiteboardId ?? undefined}
+          projectId={projectId ?? undefined}
           analysisRequest={assistantAnalysisRequest ?? undefined}
           onAnalysisHandled={(id) =>
             setAssistantAnalysisRequest((prev) => (prev?.id === id ? null : prev))

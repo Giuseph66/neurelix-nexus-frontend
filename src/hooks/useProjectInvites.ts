@@ -6,7 +6,8 @@ export interface ProjectInvite {
   id: string;
   project_id: string;
   email: string;
-  role: 'admin' | 'tech_lead' | 'developer' | 'viewer';
+  role: 'admin' | 'tech_lead' | 'developer' | 'viewer' | 'custom';
+  custom_role_name?: string | null;
   token: string;
   expires_at: string;
   accepted_at: string | null;
@@ -20,7 +21,8 @@ export interface ProjectInvite {
 export interface CreateInviteInput {
   projectId: string;
   email: string;
-  role?: 'admin' | 'tech_lead' | 'developer' | 'viewer';
+  role?: 'admin' | 'tech_lead' | 'developer' | 'viewer' | 'custom';
+  custom_role_name?: string | null;
 }
 
 /**
@@ -52,6 +54,7 @@ export function useCreateInvite() {
           projectId: input.projectId,
           email: input.email,
           role: input.role || 'developer',
+          custom_role_name: input.custom_role_name || null,
         },
       });
     },

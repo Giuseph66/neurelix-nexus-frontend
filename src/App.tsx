@@ -15,6 +15,7 @@ import Whiteboard from "./pages/project/Whiteboard";
 import Tarefas from "./pages/project/Tarefas";
 import Code from "./pages/project/Code";
 import Team from "./pages/project/Team";
+import RoleSettings from "./pages/project/RoleSettings";
 import Settings from "./pages/project/Settings";
 import NotFound from "./pages/NotFound";
 
@@ -42,6 +43,7 @@ const App = () => (
                 <Route path="tarefas" element={<Tarefas />} />
                 <Route path="code/*" element={<Code />} />
                 <Route path="team" element={<Team />} />
+                <Route path="team/roles" element={<RoleSettings />} />
                 <Route path="settings" element={<Settings />} />
               </Route>
 

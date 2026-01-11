@@ -5,7 +5,12 @@ import { CSS } from '@dnd-kit/utilities';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { MoreHorizontal, Pencil, Trash2, Check, X } from 'lucide-react';
 import { useUpdateWorkflowStatus, useDeleteWorkflowStatus } from '@/hooks/useTarefas';
 import type { WorkflowStatus } from '@/types/tarefas';
@@ -133,61 +138,55 @@ export function KanbanColumn({ status, workflowId, tarefasCount, children }: Kan
             <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
               {tarefasCount}
             </span>
-            <Popover open={showMenu} onOpenChange={setShowMenu}>
-              <PopoverTrigger asChild>
+            <DropdownMenu open={showMenu} onOpenChange={setShowMenu}>
+              <DropdownMenuTrigger asChild>
                 <Button 
                   variant="ghost" 
                   size="icon" 
                   className="h-6 w-6"
                   onClick={(e) => {
                     e.stopPropagation();
-                    e.preventDefault();
                   }}
                   onPointerDown={(e) => {
                     e.stopPropagation();
-                    e.preventDefault();
                   }}
                   onMouseDown={(e) => {
                     e.stopPropagation();
-                    e.preventDefault();
                   }}
                 >
                   <MoreHorizontal className="h-4 w-4" />
                 </Button>
-              </PopoverTrigger>
-              <PopoverContent 
-                className="w-40 p-1" 
+              </DropdownMenuTrigger>
+              <DropdownMenuContent 
                 align="end"
-                onPointerDownOutside={(e) => e.stopPropagation()}
+                onClick={(e) => e.stopPropagation()}
+                onPointerDownOutside={(e) => {
+                  e.stopPropagation();
+                }}
               >
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-start gap-2"
+                <DropdownMenuItem
                   onClick={(e) => { 
                     e.stopPropagation();
                     setIsEditing(true); 
                     setShowMenu(false); 
                   }}
                 >
-                  <Pencil className="h-3 w-3" />
+                  <Pencil className="h-3 w-3 mr-2" />
                   Editar
-                </Button>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="w-full justify-start gap-2 text-destructive hover:text-destructive"
+                </DropdownMenuItem>
+                <DropdownMenuItem
                   onClick={(e) => {
                     e.stopPropagation();
                     handleDelete();
                   }}
                   disabled={status.is_initial || status.is_final}
+                  className="text-destructive focus:text-destructive"
                 >
-                  <Trash2 className="h-3 w-3" />
+                  <Trash2 className="h-3 w-3 mr-2" />
                   Excluir
-                </Button>
-              </PopoverContent>
-            </Popover>
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </>
         )}
       </div>

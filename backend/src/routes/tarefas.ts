@@ -32,23 +32,61 @@ export const tarefaRoutes: FastifyPluginAsync = async (app) => {
       return reply.code(403).send({ error: 'Access denied' });
     }
 
-    let query = 'SELECT * FROM tarefas WHERE 1=1';
+    // Build query with JOIN to get status information including is_final
+    let query = `
+      SELECT 
+        t.*,
+        jsonb_build_object(
+          'id', ws.id,
+          'workflow_id', ws.workflow_id,
+          'name', ws.name,
+          'color', ws.color,
+          'position', ws.position,
+          'is_initial', ws.is_initial,
+          'is_final', ws.is_final,
+          'created_at', ws.created_at
+        ) as status
+      FROM tarefas t
+      LEFT JOIN workflow_statuses ws ON ws.id = t.status_id
+      WHERE 1=1
+    `;
     const params: any[] = [];
     let paramIndex = 1;
 
     if (projectId) {
-      query += ` AND project_id = $${paramIndex++}`;
+      query += ` AND t.project_id = $${paramIndex++}`;
       params.push(projectId);
     }
     if (boardId) {
-      query += ` AND board_id = $${paramIndex++}`;
+      query += ` AND t.board_id = $${paramIndex++}`;
       params.push(boardId);
     }
 
-    query += ' ORDER BY backlog_position ASC NULLS LAST, created_at DESC';
+    query += ' ORDER BY t.backlog_position ASC NULLS LAST, t.created_at DESC';
 
     const result = await app.db.query(query, params);
-    return reply.send(result.rows);
+    
+    // Parse status JSON if it's a string
+    const tarefas = result.rows.map((row: any) => {
+      let status = row.status;
+      if (typeof status === 'string') {
+        try {
+          status = JSON.parse(status);
+        } catch {
+          status = null;
+        }
+      }
+      // If status is null or empty object, set to null
+      if (!status || !status.id) {
+        status = null;
+      }
+      return {
+        ...row,
+        status,
+      };
+    });
+    
+    return reply.send(tarefas);
   });
 
   // GET /tarefas/:id - Get single tarefa

@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { EditSprintDialog } from './EditSprintDialog';
-import { ChevronDown, ChevronRight, Play, CheckCircle, GripVertical, Bug, Zap, CheckSquare, BookOpen, Circle, Pencil } from 'lucide-react';
+import { ChevronDown, ChevronRight, Play, CheckCircle, GripVertical, Pencil } from 'lucide-react';
 import type { Tarefa, Sprint } from '@/types/tarefas';
 import { PRIORITY_CONFIG, TYPE_CONFIG } from '@/types/tarefas';
 
@@ -51,11 +51,8 @@ function SprintItem({ tarefa, onClick }: SprintItemProps) {
   const typeConfig = TYPE_CONFIG[tarefa.type];
   const priorityConfig = PRIORITY_CONFIG[tarefa.priority];
 
-  const TypeIcon = tarefa.type === 'BUG' ? Bug : 
-                   tarefa.type === 'EPIC' ? Zap :
-                   tarefa.type === 'STORY' ? BookOpen :
-                   tarefa.type === 'SUBTASK' ? Circle :
-                   CheckSquare;
+  const TypeIcon = typeConfig.icon;
+  const PriorityIcon = priorityConfig.icon;
 
   return (
     <div
@@ -84,13 +81,20 @@ function SprintItem({ tarefa, onClick }: SprintItemProps) {
 
       <span className="flex-1 text-sm font-medium truncate">{tarefa.title}</span>
 
-      <Badge 
-        variant="outline" 
-        className="text-xs"
-        style={{ borderColor: priorityConfig.color, color: priorityConfig.color }}
-      >
-        {priorityConfig.label}
-      </Badge>
+      <div className="flex items-center gap-2">
+        <PriorityIcon 
+          className="h-4 w-4" 
+          style={{ color: priorityConfig.color }} 
+          title={`Prioridade: ${priorityConfig.label}`}
+        />
+        <Badge 
+          variant="outline" 
+          className="text-[10px] h-5 px-1.5"
+          style={{ borderColor: priorityConfig.color + '40', color: priorityConfig.color }}
+        >
+          {priorityConfig.label}
+        </Badge>
+      </div>
     </div>
   );
 }
