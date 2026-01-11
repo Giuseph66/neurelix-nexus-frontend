@@ -11,7 +11,6 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
-  SidebarTrigger,
   useSidebar,
 } from "@/components/ui/sidebar";
 import {
@@ -24,7 +23,6 @@ import {
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useAuth } from "@/contexts/AuthContext";
 import {
-  Boxes,
   LayoutDashboard,
   PenTool,
   ListTodo,
@@ -36,12 +34,20 @@ import {
   FolderOpen,
 } from "lucide-react";
 
-const navItems = [
+interface NavItem {
+  title: string;
+  url: string;
+  icon: React.ComponentType<{ className?: string }>;
+  // Para rotas que têm sub-rotas (como /code/*)
+  matchSubRoutes?: boolean;
+}
+
+const navItems: NavItem[] = [
   { title: "Dashboard", url: "dashboard", icon: LayoutDashboard },
   { title: "Quadro Branco", url: "whiteboard", icon: PenTool },
   { title: "Tarefas", url: "tarefas", icon: ListTodo },
-  { title: "Código", url: "code", icon: GitBranch },
-  { title: "Equipe", url: "team", icon: Users },
+  { title: "Código", url: "code", icon: GitBranch, matchSubRoutes: true },
+  { title: "Equipe", url: "team", icon: Users, matchSubRoutes: true },
   { title: "Configurações", url: "settings", icon: Settings },
 ];
 
@@ -66,6 +72,29 @@ export function AppSidebar() {
   const handleSignOut = async () => {
     await signOut();
     navigate("/auth");
+  };
+
+  /**
+   * Verifica se uma rota está ativa
+   * Suporta rotas exatas e rotas com sub-rotas (matchSubRoutes)
+   */
+  const isRouteActive = (item: NavItem): boolean => {
+    if (!projectId) return false;
+    
+    const exactPath = `/project/${projectId}/${item.url}`;
+    
+    // Se a rota exata corresponde
+    if (location.pathname === exactPath) {
+      return true;
+    }
+    
+    if (item.matchSubRoutes) {
+      if (location.pathname.startsWith(exactPath + "/") || location.pathname === exactPath) {
+        return true;
+      }
+    }
+    
+    return false;
   };
 
   return (
@@ -93,15 +122,20 @@ export function AppSidebar() {
                 <SidebarMenuButton
                   asChild
                   tooltip="Projetos"
-                  className="text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                  isActive={location.pathname === "/projects" || location.pathname.startsWith("/projects/")}
+                  className={
+                    location.pathname === "/projects" || location.pathname.startsWith("/projects/")
+                      ? "bg-sidebar-accent text-sidebar-foreground"
+                      : "text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                  }
                 >
                   <NavLink
                     to="/projects"
                     className="flex items-center gap-3"
-                    activeClassName="bg-sidebar-accent text-sidebar-foreground"
+                    activeClassName=""
                   >
-                    <FolderOpen className="h-4 w-4" />
-                    {!collapsed && <span>Projetos</span>}
+                    <FolderOpen className="h-4 w-4 flex-shrink-0" />
+                    {!collapsed && <span className="truncate">Projetos</span>}
                   </NavLink>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -121,7 +155,7 @@ export function AppSidebar() {
               <SidebarMenu>
                 {navItems.map((item) => {
                   const fullPath = `/project/${projectId}/${item.url}`;
-                  const isActive = location.pathname === fullPath;
+                  const isActive = isRouteActive(item);
 
                   return (
                     <SidebarMenuItem key={item.title}>
@@ -140,8 +174,8 @@ export function AppSidebar() {
                           className="flex items-center gap-3"
                           activeClassName=""
                         >
-                          <item.icon className="h-4 w-4" />
-                          {!collapsed && <span>{item.title}</span>}
+                          <item.icon className="h-4 w-4 flex-shrink-0" />
+                          {!collapsed && <span className="truncate">{item.title}</span>}
                         </NavLink>
                       </SidebarMenuButton>
                     </SidebarMenuItem>

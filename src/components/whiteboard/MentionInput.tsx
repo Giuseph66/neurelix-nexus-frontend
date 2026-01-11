@@ -2,7 +2,7 @@ import { useState, useRef, useEffect } from "react";
 import { Textarea } from "@/components/ui/textarea";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/api";
 
 interface TeamMember {
   id: string;
@@ -28,6 +28,7 @@ export function MentionInput({
   projectId,
 }: MentionInputProps) {
   const [showSuggestions, setShowSuggestions] = useState(false);
+  const [members, setMembers] = useState<TeamMember[]>([]);
   const [suggestions, setSuggestions] = useState<TeamMember[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [mentionQuery, setMentionQuery] = useState("");
@@ -36,53 +37,44 @@ export function MentionInput({
 
   // Fetch team members for the project
   useEffect(() => {
-    if (!projectId || !mentionQuery) {
-      setSuggestions([]);
+    if (!projectId) {
+      setMembers([]);
       return;
     }
 
     const fetchMembers = async () => {
-      // First get project members
-      const { data: members, error: membersError } = await supabase
-        .from('project_members')
-        .select('id, user_id')
-        .eq('project_id', projectId);
+      try {
+        const data = await apiFetch<{ members: { id: string; user_id: string; profiles?: { full_name: string | null } }[] }>(
+          `/projects/${projectId}/members`
+        );
 
-      if (membersError || !members) {
-        console.error('Error fetching members:', membersError);
-        return;
-      }
-
-      // Then get profiles for those users
-      const userIds = members.map(m => m.user_id);
-      const { data: profiles, error: profilesError } = await supabase
-        .from('profiles')
-        .select('user_id, full_name')
-        .in('user_id', userIds);
-
-      if (profilesError) {
-        console.error('Error fetching profiles:', profilesError);
-        return;
-      }
-
-      // Combine and filter
-      const teamMembers: TeamMember[] = members.map(m => {
-        const profile = profiles?.find(p => p.user_id === m.user_id);
-        return {
+        const teamMembers: TeamMember[] = (data.members || []).map(m => ({
           id: m.id,
           user_id: m.user_id,
-          full_name: profile?.full_name || 'Usuário',
-        };
-      }).filter(m => 
-        m.full_name?.toLowerCase().includes(mentionQuery.toLowerCase())
-      );
+          full_name: m.profiles?.full_name || 'Usuário',
+        }));
 
-      setSuggestions(teamMembers);
-      setSelectedIndex(0);
+        setMembers(teamMembers);
+      } catch (error) {
+        console.error('Error fetching members:', error);
+        return;
+      }
     };
 
     fetchMembers();
-  }, [projectId, mentionQuery]);
+  }, [projectId]);
+
+  useEffect(() => {
+    if (!mentionQuery) {
+      setSuggestions([]);
+      return;
+    }
+
+    const lower = mentionQuery.toLowerCase();
+    const filtered = members.filter(m => m.full_name?.toLowerCase().includes(lower));
+    setSuggestions(filtered);
+    setSelectedIndex(0);
+  }, [mentionQuery, members]);
 
   const handleChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const newValue = e.target.value;

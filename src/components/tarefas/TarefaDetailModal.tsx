@@ -4,6 +4,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,7 +22,7 @@ import {
   useUpdateTarefa,
   useCreateComment,
 } from '@/hooks/useTarefas';
-import { PRIORITY_CONFIG, TYPE_CONFIG, type UpdateTarefaInput } from '@/types/tarefas';
+import { PRIORITY_CONFIG, TYPE_CONFIG, type UpdateTarefaInput, type TarefaType } from '@/types/tarefas';
 import {
   Calendar,
   User,
@@ -36,11 +37,23 @@ import {
   Code2,
   GitPullRequest,
   GitCommit,
+  Pencil,
+  X,
+  Zap,
 } from 'lucide-react';
 import { useTarefaGitLinks } from '@/hooks/useTarefaGitLinks';
+import { useProjectMembers } from '@/hooks/useProjectMembers';
+import { useEpics } from '@/hooks/useBacklog';
 import { format, formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { useNavigate } from 'react-router-dom';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 interface TarefaDetailModalProps {
   tarefaId: string | null;
@@ -53,6 +66,8 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
   const { data: comments, isLoading: commentsLoading } = useTarefaComments(tarefaId || undefined);
   const { data: activity, isLoading: activityLoading } = useTarefaActivity(tarefaId || undefined);
   const { data: gitLinksData, isLoading: gitLinksLoading } = useTarefaGitLinks(tarefaId || undefined);
+  const { data: members } = useProjectMembers(tarefa?.project_id);
+  const { data: epics } = useEpics(tarefa?.project_id);
   
   const updateTarefa = useUpdateTarefa();
   const createComment = useCreateComment();
@@ -60,7 +75,26 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
   const [isEditing, setIsEditing] = useState(false);
   const [editedTitle, setEditedTitle] = useState('');
   const [editedDescription, setEditedDescription] = useState('');
+  const [editedPriority, setEditedPriority] = useState<UpdateTarefaInput['priority']>('MEDIUM');
+  const [editedAssigneeId, setEditedAssigneeId] = useState<string>('none');
+  const [editedEpicId, setEditedEpicId] = useState<string>('none');
+  const [editedDueDate, setEditedDueDate] = useState<string>(''); // yyyy-mm-dd
+  const [editedEstimatedHours, setEditedEstimatedHours] = useState<string>(''); // keep string for input
+  const [editedLabels, setEditedLabels] = useState<string[]>([]);
+  const [newLabelInput, setNewLabelInput] = useState('');
   const [newComment, setNewComment] = useState('');
+
+  // Helper: extract type from labels (if any label matches a type)
+  const getTypeFromLabels = (labels: string[]): TarefaType | undefined => {
+    const typeLabels = ['EPIC', 'STORY', 'TASK', 'SUBTASK', 'BUG'];
+    for (const label of labels) {
+      const upperLabel = label.toUpperCase();
+      if (typeLabels.includes(upperLabel)) {
+        return upperLabel as TarefaType;
+      }
+    }
+    return undefined;
+  };
 
   const handleSave = async () => {
     if (!tarefaId) return;
@@ -68,6 +102,37 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
     const input: UpdateTarefaInput = {};
     if (editedTitle !== tarefa?.title) input.title = editedTitle;
     if (editedDescription !== tarefa?.description) input.description = editedDescription;
+    if (editedPriority && editedPriority !== tarefa?.priority) input.priority = editedPriority as any;
+
+    // Extract type from labels if present
+    const inferredType = getTypeFromLabels(editedLabels);
+    if (inferredType) {
+      // Always update type if we have a type label
+      if (inferredType !== tarefa?.type) {
+        input.type = inferredType;
+      }
+    } else {
+      // If no type label found, default to TASK if no type was set before
+      if (!tarefa?.type || tarefa.type !== 'TASK') {
+        input.type = 'TASK';
+      }
+    }
+
+    const assigneeToSend = editedAssigneeId === 'none' ? null : editedAssigneeId;
+    if (assigneeToSend !== (tarefa?.assignee_id ?? null)) input.assignee_id = assigneeToSend;
+
+    const epicToSend = editedEpicId === 'none' ? null : editedEpicId;
+    if (epicToSend !== (tarefa?.epic_id ?? null)) input.epic_id = epicToSend;
+
+    const dueToSend = editedDueDate ? editedDueDate : null;
+    if (dueToSend !== (tarefa?.due_date ?? null)) input.due_date = dueToSend;
+
+    const estToSend = editedEstimatedHours.trim() === '' ? null : Number(editedEstimatedHours);
+    if (estToSend !== (tarefa?.estimated_hours ?? null)) input.estimated_hours = estToSend;
+
+    // Compare labels arrays
+    const labelsEqual = JSON.stringify(editedLabels.sort()) === JSON.stringify((tarefa?.labels || []).sort());
+    if (!labelsEqual) input.labels = editedLabels;
     
     if (Object.keys(input).length > 0) {
       await updateTarefa.mutateAsync({ tarefaId, input });
@@ -88,7 +153,28 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
   const handleStartEdit = () => {
     setEditedTitle(tarefa?.title || '');
     setEditedDescription(tarefa?.description || '');
+    setEditedPriority((tarefa?.priority || 'MEDIUM') as any);
+    setEditedAssigneeId(tarefa?.assignee_id || 'none');
+    setEditedEpicId(tarefa?.epic_id || 'none');
+    setEditedDueDate(tarefa?.due_date || '');
+    setEditedEstimatedHours(tarefa?.estimated_hours != null ? String(tarefa.estimated_hours) : '');
+    // Include type as a label if it exists
+    const labels = tarefa?.labels || [];
+    const typeAsLabel = tarefa?.type && !labels.includes(tarefa.type) ? [tarefa.type, ...labels] : labels;
+    setEditedLabels(typeAsLabel);
+    setNewLabelInput('');
     setIsEditing(true);
+  };
+
+  const handleAddLabel = () => {
+    if (newLabelInput.trim() && !editedLabels.includes(newLabelInput.trim())) {
+      setEditedLabels([...editedLabels, newLabelInput.trim()]);
+      setNewLabelInput('');
+    }
+  };
+
+  const handleRemoveLabel = (label: string) => {
+    setEditedLabels(editedLabels.filter(l => l !== label));
   };
 
   if (!tarefaId) return null;
@@ -110,9 +196,10 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
             {/* Header */}
             <DialogHeader className="p-6 pb-0">
               <div className="flex items-center gap-2 text-sm text-muted-foreground mb-2">
-                <span>{typeConfig?.icon}</span>
+                {typeConfig && <typeConfig.icon className="h-4 w-4" style={{ color: typeConfig.color }} />}
                 <span className="font-mono font-medium">{tarefa.key}</span>
-                <Badge variant="outline" style={{ borderColor: priorityConfig?.color, color: priorityConfig?.color }}>
+                <Badge variant="outline" className="flex items-center gap-1.5" style={{ borderColor: priorityConfig?.color + '40', color: priorityConfig?.color, backgroundColor: priorityConfig?.color + '10' }}>
+                  {priorityConfig && <priorityConfig.icon className="h-3.5 w-3.5" />}
                   {priorityConfig?.label}
                 </Badge>
                 {tarefa.status && (
@@ -133,31 +220,24 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
                   {tarefa.title}
                 </DialogTitle>
               )}
+              <DialogDescription>
+                Clique no título/descrição para editar e use o botão "Salvar" para persistir as mudanças.
+              </DialogDescription>
             </DialogHeader>
 
             <div className="flex-1 overflow-hidden flex">
               {/* Main Content */}
-              <div className="flex-1 p-6 overflow-y-auto">
+              <div className="flex-1 p-6 overflow-y-auto min-w-0">
                 {/* Description */}
                 <div className="mb-6">
                   <h3 className="text-sm font-medium mb-2">Descrição</h3>
                   {isEditing ? (
-                    <div className="space-y-2">
-                      <Textarea
-                        value={editedDescription}
-                        onChange={(e) => setEditedDescription(e.target.value)}
-                        rows={5}
-                        placeholder="Adicione uma descrição..."
-                      />
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={handleSave} disabled={updateTarefa.isPending}>
-                          Salvar
-                        </Button>
-                        <Button size="sm" variant="outline" onClick={() => setIsEditing(false)}>
-                          Cancelar
-                        </Button>
-                      </div>
-                    </div>
+                    <Textarea
+                      value={editedDescription}
+                      onChange={(e) => setEditedDescription(e.target.value)}
+                      rows={5}
+                      placeholder="Adicione uma descrição..."
+                    />
                   ) : (
                     <div
                       className="text-sm text-muted-foreground cursor-pointer hover:bg-muted/50 p-2 rounded min-h-[60px]"
@@ -417,13 +497,49 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
               </div>
 
               {/* Sidebar */}
-              <div className="w-64 border-l border-border p-4 bg-muted/30 space-y-4">
+              <div className="w-64 border-l border-border bg-muted/30 flex flex-col overflow-hidden">
+                <ScrollArea className="flex-1">
+                  <div className="p-4 space-y-4">
+                {!isEditing && (
+                  <div className="mb-4">
+                    <Button size="sm" variant="outline" className="w-full" onClick={handleStartEdit}>
+                      <Pencil className="h-3 w-3 mr-2" />
+                      Editar Tarefa
+                    </Button>
+                  </div>
+                )}
+                
+                {isEditing && (
+                  <div className="mb-4 flex gap-2">
+                    <Button size="sm" className="flex-1" onClick={handleSave} disabled={updateTarefa.isPending}>
+                      Salvar
+                    </Button>
+                    <Button size="sm" variant="outline" className="flex-1" onClick={() => setIsEditing(false)}>
+                      Cancelar
+                    </Button>
+                  </div>
+                )}
+                
                 {/* Assignee */}
                 <div>
                   <h4 className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
                     <User className="h-3 w-3" /> Responsável
                   </h4>
-                  {tarefa.assignee ? (
+                  {isEditing ? (
+                    <Select value={editedAssigneeId || 'none'} onValueChange={setEditedAssigneeId}>
+                      <SelectTrigger className="h-9">
+                        <SelectValue placeholder="Selecionar..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Não atribuído</SelectItem>
+                        {(members || []).map((m) => (
+                          <SelectItem key={m.user_id} value={m.user_id}>
+                            {m.profiles?.full_name || m.user_id}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : tarefa.assignee?.full_name ? (
                     <div className="flex items-center gap-2">
                       <Avatar className="h-6 w-6">
                         <AvatarImage src={tarefa.assignee.avatar_url} />
@@ -433,6 +549,37 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
                     </div>
                   ) : (
                     <span className="text-sm text-muted-foreground">Não atribuído</span>
+                  )}
+                </div>
+
+                <Separator />
+
+                {/* Epic */}
+                <div>
+                  <h4 className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
+                    <Zap className="h-3 w-3" /> Épico
+                  </h4>
+                  {isEditing ? (
+                    <Select value={editedEpicId || 'none'} onValueChange={setEditedEpicId}>
+                      <SelectTrigger className="h-9">
+                        <SelectValue placeholder="Selecionar..." />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="none">Nenhum épico</SelectItem>
+                        {(epics || []).map((epic) => (
+                          <SelectItem key={epic.id} value={epic.id}>
+                            {epic.title}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : tarefa.epic_id ? (
+                    <div className="flex items-center gap-2">
+                      <Zap className="h-4 w-4 text-purple-500" />
+                      <span className="text-sm">{epics?.find(e => e.id === tarefa.epic_id)?.title || 'Épico'}</span>
+                    </div>
+                  ) : (
+                    <span className="text-sm text-muted-foreground">Nenhum épico</span>
                   )}
                 </div>
 
@@ -461,30 +608,145 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
                   <h4 className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
                     <Calendar className="h-3 w-3" /> Data de Entrega
                   </h4>
-                  <span className="text-sm">
-                    {tarefa.due_date
-                      ? format(new Date(tarefa.due_date), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })
-                      : 'Não definida'}
-                  </span>
+                  {isEditing ? (
+                    <Input
+                      type="date"
+                      value={editedDueDate}
+                      onChange={(e) => setEditedDueDate(e.target.value)}
+                      className="h-9"
+                    />
+                  ) : (
+                    <span className="text-sm">
+                      {tarefa.due_date
+                        ? format(new Date(tarefa.due_date), "dd 'de' MMMM 'de' yyyy", { locale: ptBR })
+                        : 'Não definida'}
+                    </span>
+                  )}
                 </div>
 
                 <Separator />
 
-                {/* Labels */}
+                {/* Labels (includes type) */}
                 <div>
                   <h4 className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                    <Tag className="h-3 w-3" /> Labels
+                    <Tag className="h-3 w-3" /> Tipo e Etiquetas
                   </h4>
-                  {tarefa.labels.length > 0 ? (
-                    <div className="flex flex-wrap gap-1">
-                      {tarefa.labels.map(label => (
-                        <Badge key={label} variant="secondary" className="text-xs">
-                          {label}
-                        </Badge>
-                      ))}
+                  {isEditing ? (
+                    <div className="space-y-2">
+                      <div className="flex flex-wrap gap-1">
+                        {editedLabels.map(label => {
+                          const isType = ['EPIC', 'STORY', 'TASK', 'SUBTASK', 'BUG'].includes(label.toUpperCase());
+                          const typeConfig = isType ? TYPE_CONFIG[label.toUpperCase() as TarefaType] : null;
+                          return (
+                            <Badge 
+                              key={label} 
+                              variant={isType ? "default" : "secondary"} 
+                              className="text-xs flex items-center gap-1"
+                              style={isType && typeConfig ? { 
+                                backgroundColor: typeConfig.color,
+                                color: 'white',
+                                borderColor: typeConfig.color
+                              } : {}}
+                            >
+                              {isType && typeConfig && <typeConfig.icon className="h-3 w-3" />}
+                              {label}
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveLabel(label)}
+                                className="ml-1 hover:text-destructive"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </Badge>
+                          );
+                        })}
+                      </div>
+                      <div className="space-y-1">
+                        <div className="flex gap-1">
+                          <Input
+                            value={newLabelInput}
+                            onChange={(e) => setNewLabelInput(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                e.preventDefault();
+                                handleAddLabel();
+                              }
+                            }}
+                            placeholder="Adicionar etiqueta ou tipo..."
+                            className="h-8 text-xs"
+                          />
+                          <Button
+                            type="button"
+                            size="sm"
+                            variant="outline"
+                            onClick={handleAddLabel}
+                            className="h-8"
+                          >
+                            <Tag className="h-3 w-3" />
+                          </Button>
+                        </div>
+                        <div className="flex flex-wrap gap-1">
+                          {Object.keys(TYPE_CONFIG).map((type) => {
+                            const typeKey = type as TarefaType;
+                            const config = TYPE_CONFIG[typeKey];
+                            const isSelected = editedLabels.includes(type);
+                            const Icon = config.icon;
+                            return (
+                              <Button
+                                key={type}
+                                type="button"
+                                size="sm"
+                                variant={isSelected ? "default" : "outline"}
+                                className="h-7 text-xs gap-1.5"
+                                style={isSelected ? { backgroundColor: config.color, color: 'white' } : {}}
+                                onClick={() => {
+                                  if (isSelected) {
+                                    handleRemoveLabel(type);
+                                  } else {
+                                    // Remove other types first
+                                    const otherTypes = ['EPIC', 'STORY', 'TASK', 'SUBTASK', 'BUG'];
+                                    const filtered = editedLabels.filter(l => !otherTypes.includes(l.toUpperCase()));
+                                    setEditedLabels([...filtered, type]);
+                                  }
+                                }}
+                              >
+                                <Icon className="h-3 w-3" /> {config.label}
+                              </Button>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
                   ) : (
-                    <span className="text-sm text-muted-foreground">Nenhuma</span>
+                    <>
+                      <p className="text-xs text-muted-foreground mb-2">
+                        Use etiquetas para categorizar tarefas. Tipos (EPIC, STORY, TASK, SUBTASK, BUG) também são etiquetas.
+                      </p>
+                      <div className="flex flex-wrap gap-1">
+                        {tarefa.type && (
+                          <Badge 
+                            variant="default" 
+                            className="text-xs flex items-center gap-1.5"
+                            style={{ 
+                              backgroundColor: typeConfig?.color,
+                              color: 'white',
+                              borderColor: typeConfig?.color
+                            }}
+                          >
+                            {typeConfig && <typeConfig.icon className="h-3.5 w-3.5" />}
+                            {typeConfig?.label}
+                          </Badge>
+                        )}
+                        {tarefa.labels?.filter(l => !['EPIC', 'STORY', 'TASK', 'SUBTASK', 'BUG'].includes(l.toUpperCase())).map(label => (
+                          <Badge key={label} variant="secondary" className="text-xs">
+                            {label}
+                          </Badge>
+                        ))}
+                      </div>
+                      {(!tarefa.labels || tarefa.labels.length === 0) && !tarefa.type && (
+                        <span className="text-sm text-muted-foreground">Nenhuma etiqueta</span>
+                      )}
+                    </>
                   )}
                 </div>
 
@@ -495,10 +757,65 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
                   <h4 className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
                     <Clock className="h-3 w-3" /> Estimativa
                   </h4>
-                  <span className="text-sm">
-                    {tarefa.estimated_hours ? `${tarefa.estimated_hours}h` : 'Não estimada'}
-                  </span>
+                  {isEditing ? (
+                    <Input
+                      type="number"
+                      min={0}
+                      step="0.5"
+                      value={editedEstimatedHours}
+                      onChange={(e) => setEditedEstimatedHours(e.target.value)}
+                      className="h-9"
+                      placeholder="Ex: 2"
+                    />
+                  ) : (
+                    <span className="text-sm">
+                      {tarefa.estimated_hours != null ? `${tarefa.estimated_hours}h` : 'Não estimada'}
+                    </span>
+                  )}
                 </div>
+
+                <Separator />
+
+                {/* Priority */}
+                <div>
+                  <h4 className="text-xs font-medium text-muted-foreground mb-2">Prioridade</h4>
+                  {isEditing ? (
+                    <Select value={String(editedPriority)} onValueChange={(v) => setEditedPriority(v as any)}>
+                      <SelectTrigger className="h-9 flex items-center gap-2">
+                        {editedPriority && (() => {
+                          const config = PRIORITY_CONFIG[editedPriority];
+                          const Icon = config.icon;
+                          return (
+                            <>
+                              <Icon className="h-4 w-4 flex-shrink-0" style={{ color: config.color }} />
+                              <SelectValue>{config.label}</SelectValue>
+                            </>
+                          );
+                        })()}
+                      </SelectTrigger>
+                      <SelectContent>
+                        {Object.keys(PRIORITY_CONFIG).map((k) => {
+                          const config = PRIORITY_CONFIG[k as any];
+                          return (
+                            <SelectItem key={k} value={k}>
+                              {config.label}
+                            </SelectItem>
+                          );
+                        })}
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      {priorityConfig && (
+                        <>
+                          <priorityConfig.icon className="h-4 w-4" style={{ color: priorityConfig.color }} />
+                          <span className="text-sm">{priorityConfig.label}</span>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
+
 
                 <Separator />
 
@@ -507,6 +824,8 @@ export function TarefaDetailModal({ tarefaId, onClose }: TarefaDetailModalProps)
                   <div>Criada: {format(new Date(tarefa.created_at), "dd/MM/yyyy HH:mm", { locale: ptBR })}</div>
                   <div>Atualizada: {format(new Date(tarefa.updated_at), "dd/MM/yyyy HH:mm", { locale: ptBR })}</div>
                 </div>
+                  </div>
+                </ScrollArea>
               </div>
             </div>
           </>

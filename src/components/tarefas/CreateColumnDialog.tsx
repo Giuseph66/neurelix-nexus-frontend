@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -48,6 +48,9 @@ export function CreateColumnDialog({ open, onOpenChange, workflowId }: CreateCol
       <DialogContent className="sm:max-w-[400px]">
         <DialogHeader>
           <DialogTitle>Nova Coluna</DialogTitle>
+          <DialogDescription>
+            Crie uma nova coluna para o seu workflow (ex.: “Em revisão”, “Bloqueado”).
+          </DialogDescription>
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">

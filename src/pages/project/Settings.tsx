@@ -1,7 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,15 +39,8 @@ export default function Settings() {
     queryKey: ["project-role", projectId],
     queryFn: async () => {
       if (!projectId || !user) return null;
-      const { data, error } = await supabase
-        .from("project_members")
-        .select("role")
-        .eq("project_id", projectId)
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (error) throw error;
-      return data?.role as AppRole | null;
+      const data = await apiFetch<{ role: AppRole }>(`/projects/${projectId}/role`, { auth: true });
+      return data.role;
     },
     enabled: !!projectId && !!user,
   });
@@ -55,32 +48,29 @@ export default function Settings() {
   const { data: project, isLoading } = useQuery({
     queryKey: ["project", projectId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("projects")
-        .select("*")
-        .eq("id", projectId)
-        .maybeSingle();
-
-      if (error) throw error;
-      if (data) {
-        setName(data.name);
-        setDescription(data.description || "");
-      }
-      return data;
+      if (!projectId) return null;
+      return await apiFetch<any>(`/projects/${projectId}`, { auth: true });
     },
     enabled: !!projectId,
   });
+
+  useEffect(() => {
+    if (project) {
+      setName(project.name || "");
+      setDescription(project.description || "");
+    }
+  }, [project]);
 
   usePageTitle("Configurações", project?.name);
 
   const updateProjectMutation = useMutation({
     mutationFn: async ({ name, description }: { name: string; description: string }) => {
-      const { error } = await supabase
-        .from("projects")
-        .update({ name, description: description || null })
-        .eq("id", projectId);
-
-      if (error) throw error;
+      if (!projectId) throw new Error("projectId missing");
+      await apiFetch(`/projects/${projectId}`, {
+        method: "PUT",
+        body: { name, description },
+        auth: true,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["project", projectId] });
@@ -98,12 +88,8 @@ export default function Settings() {
 
   const deleteProjectMutation = useMutation({
     mutationFn: async () => {
-      const { error } = await supabase
-        .from("projects")
-        .delete()
-        .eq("id", projectId);
-
-      if (error) throw error;
+      if (!projectId) throw new Error("projectId missing");
+      await apiFetch(`/projects/${projectId}`, { method: "DELETE", auth: true });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -35,25 +35,30 @@ import {
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuTrigger,
+  DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, Loader2, MoreHorizontal, UserMinus, Shield, X, Mail, Clock } from "lucide-react";
+import { Plus, Loader2, MoreHorizontal, UserMinus, Shield, X, Mail, Clock, Settings } from "lucide-react";
 import { usePageTitle } from "@/hooks/usePageTitle";
 import { useCreateInvite, useProjectInvites, useDeleteInvite } from "@/hooks/useProjectInvites";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
-
-type AppRole = "admin" | "tech_lead" | "developer" | "viewer";
+import { getRoleLabel, getRoleBadgeVariant, type AppRole } from "@/lib/roles";
+import { useNavigate } from "react-router-dom";
+import { useCustomRoles } from "@/hooks/useRolePermissions";
 
 interface ProjectMember {
   id: string;
   role: AppRole;
   user_id: string;
   created_at: string;
+  custom_role_name?: string | null;
   profiles: {
-    full_name: string | null;
+    id?: string;
+    full_name?: string | null;
+    avatar_url?: string | null;
   } | null;
 }
 
@@ -62,11 +67,13 @@ export default function Team() {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const [isInviteOpen, setIsInviteOpen] = useState(false);
   const [isInvitesModalOpen, setIsInvitesModalOpen] = useState(false);
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState<AppRole>("developer");
+  const [inviteRole, setInviteRole] = useState<AppRole | 'custom'>("developer");
+  const [inviteCustomRoleName, setInviteCustomRoleName] = useState<string | null>(null);
 
   // Hooks para convites
   const { data: invitesData } = useProjectInvites(projectId || undefined);
@@ -77,15 +84,8 @@ export default function Team() {
     queryKey: ["project-role", projectId],
     queryFn: async () => {
       if (!projectId || !user) return null;
-      const { data, error } = await supabase
-        .from("project_members")
-        .select("role")
-        .eq("project_id", projectId)
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (error) throw error;
-      return data?.role as AppRole | null;
+      const data = await apiFetch<{ role: AppRole }>(`/projects/${projectId}/role`, { auth: true });
+      return data.role;
     },
     enabled: !!projectId && !!user,
   });
@@ -94,57 +94,45 @@ export default function Team() {
     queryKey: ["project", projectId],
     queryFn: async () => {
       if (!projectId) return null;
-      const { data, error } = await supabase
-        .from("projects")
-        .select("*")
-        .eq("id", projectId)
-        .maybeSingle();
-
-      if (error) throw error;
-      return data;
+      return await apiFetch(`/projects/${projectId}`, { auth: true });
     },
     enabled: !!projectId,
   });
 
-  const { data: members, isLoading } = useQuery({
+  const { data: membersData, isLoading } = useQuery({
     queryKey: ["project-members", projectId],
     queryFn: async () => {
-      // First get members
-      const { data: membersData, error: membersError } = await supabase
-        .from("project_members")
-        .select("id, role, user_id, created_at")
-        .eq("project_id", projectId!)
-        .order("created_at", { ascending: true });
-
-      if (membersError) throw membersError;
-      if (!membersData) return [];
-
-      // Then get profiles for these members
-      const userIds = membersData.map((m) => m.user_id);
-      const { data: profilesData } = await supabase
-        .from("profiles")
-        .select("user_id, full_name")
-        .in("user_id", userIds);
-
-      // Merge data
-      return membersData.map((member) => ({
-        ...member,
-        profiles: profilesData?.find((p) => p.user_id === member.user_id) || null,
-      })) as ProjectMember[];
+      if (!projectId) return { members: [] };
+      return await apiFetch<{ members: ProjectMember[] }>(`/projects/${projectId}/members`, { auth: true });
     },
     enabled: !!projectId,
   });
+
+  const { data: customRolesData } = useCustomRoles(projectId || undefined);
+  const customRoles = customRolesData?.roles || [];
+
+  const members = membersData?.members || [];
 
   usePageTitle("Equipe", project?.name);
 
   const updateRoleMutation = useMutation({
-    mutationFn: async ({ memberId, newRole }: { memberId: string; newRole: AppRole }) => {
-      const { error } = await supabase
-        .from("project_members")
-        .update({ role: newRole })
-        .eq("id", memberId);
-
-      if (error) throw error;
+    mutationFn: async ({ 
+      memberId, 
+      newRole, 
+      customRoleName 
+    }: { 
+      memberId: string; 
+      newRole: AppRole | 'custom';
+      customRoleName?: string | null;
+    }) => {
+      await apiFetch(`/projects/${projectId}/members/${memberId}`, {
+        method: 'PUT',
+        body: { 
+          role: newRole,
+          custom_role_name: newRole === 'custom' ? customRoleName : null,
+        },
+        auth: true,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["project-members", projectId] });
@@ -161,12 +149,10 @@ export default function Team() {
 
   const removeMemberMutation = useMutation({
     mutationFn: async (memberId: string) => {
-      const { error } = await supabase
-        .from("project_members")
-        .delete()
-        .eq("id", memberId);
-
-      if (error) throw error;
+      await apiFetch(`/projects/${projectId}/members/${memberId}`, {
+        method: 'DELETE',
+        auth: true,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["project-members", projectId] });
@@ -186,48 +172,33 @@ export default function Team() {
 
   const handleInvite = async () => {
     if (!projectId || !inviteEmail.trim()) return;
+    if (inviteRole === 'custom' && !inviteCustomRoleName) {
+      toast({
+        title: "Erro",
+        description: "Selecione um role personalizado",
+        variant: "destructive",
+      });
+      return;
+    }
 
     createInviteMutation.mutate(
       {
         projectId,
         email: inviteEmail.trim(),
-        role: inviteRole,
+        role: inviteRole === 'custom' ? 'custom' : inviteRole,
+        custom_role_name: inviteRole === 'custom' ? inviteCustomRoleName : undefined,
       },
       {
         onSuccess: () => {
           setInviteEmail("");
           setInviteRole("developer");
+          setInviteCustomRoleName(null);
           setIsInviteOpen(false);
         },
       }
     );
   };
 
-  const getRoleBadgeVariant = (role: AppRole) => {
-    switch (role) {
-      case "admin":
-        return "default";
-      case "tech_lead":
-        return "secondary";
-      case "developer":
-        return "outline";
-      default:
-        return "outline";
-    }
-  };
-
-  const getRoleLabel = (role: AppRole) => {
-    switch (role) {
-      case "admin":
-        return "Admin";
-      case "tech_lead":
-        return "Tech Lead";
-      case "developer":
-        return "Developer";
-      case "viewer":
-        return "Viewer";
-    }
-  };
 
   return (
     <div className="p-6 space-y-6">
@@ -241,6 +212,13 @@ export default function Team() {
 
         {canInvite && (
           <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => navigate(`/project/${projectId}/team/roles`)}
+            >
+              <Settings className="mr-2 h-4 w-4" />
+              Configurar Roles
+            </Button>
             <Button
               variant="outline"
               onClick={() => setIsInvitesModalOpen(true)}
@@ -280,17 +258,49 @@ export default function Team() {
                   </div>
                   <div className="space-y-2">
                     <Label htmlFor="role">Papel</Label>
-                    <Select value={inviteRole} onValueChange={(v) => setInviteRole(v as AppRole)}>
+                    <Select 
+                      value={inviteRole} 
+                      onValueChange={(v) => {
+                        setInviteRole(v as AppRole | 'custom');
+                        if (v !== 'custom') {
+                          setInviteCustomRoleName(null);
+                        }
+                      }}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="admin">Admin</SelectItem>
-                        <SelectItem value="tech_lead">Tech Lead</SelectItem>
-                        <SelectItem value="developer">Developer</SelectItem>
-                        <SelectItem value="viewer">Viewer</SelectItem>
+                        <SelectItem value="admin">{getRoleLabel("admin")}</SelectItem>
+                        <SelectItem value="tech_lead">{getRoleLabel("tech_lead")}</SelectItem>
+                        <SelectItem value="developer">{getRoleLabel("developer")}</SelectItem>
+                        <SelectItem value="viewer">{getRoleLabel("viewer")}</SelectItem>
+                        {customRoles.length > 0 && (
+                          <>
+                            <SelectItem value="custom" className="font-medium">
+                              Personalizado
+                            </SelectItem>
+                          </>
+                        )}
                       </SelectContent>
                     </Select>
+                    {inviteRole === 'custom' && (
+                      <Select
+                        value={inviteCustomRoleName || ''}
+                        onValueChange={(v) => setInviteCustomRoleName(v)}
+                      >
+                        <SelectTrigger>
+                          <SelectValue placeholder="Selecione um role personalizado" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {customRoles.map((role) => (
+                            <SelectItem key={role.id} value={role.role_name}>
+                              {role.role_name}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    )}
                   </div>
                 </div>
                 <DialogFooter>
@@ -299,7 +309,7 @@ export default function Team() {
                   </Button>
                   <Button
                     onClick={handleInvite}
-                    disabled={!inviteEmail.trim() || createInviteMutation.isPending}
+                    disabled={!inviteEmail.trim() || createInviteMutation.isPending || (inviteRole === 'custom' && !inviteCustomRoleName)}
                   >
                     {createInviteMutation.isPending ? (
                       <>
@@ -343,7 +353,9 @@ export default function Team() {
                         <div className="font-medium">{invite.email}</div>
                         <div className="text-sm text-muted-foreground flex items-center gap-2">
                           <Badge variant="outline" className="text-xs">
-                            {getRoleLabel(invite.role)}
+                            {invite.role === 'custom' && invite.custom_role_name
+                              ? invite.custom_role_name
+                              : getRoleLabel(invite.role)}
                           </Badge>
                           <span className="flex items-center gap-1">
                             <Clock className="h-3 w-3" />
@@ -500,7 +512,9 @@ export default function Team() {
                     </TableCell>
                     <TableCell>
                       <Badge variant={getRoleBadgeVariant(member.role)}>
-                        {getRoleLabel(member.role)}
+                        {member.role === 'custom' && member.custom_role_name
+                          ? member.custom_role_name
+                          : getRoleLabel(member.role)}
                       </Badge>
                     </TableCell>
                     <TableCell className="text-muted-foreground">
@@ -525,7 +539,7 @@ export default function Team() {
                                 }
                               >
                                 <Shield className="mr-2 h-4 w-4" />
-                                Tornar Admin
+                                Tornar {getRoleLabel("admin")}
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() =>
@@ -536,7 +550,7 @@ export default function Team() {
                                 }
                               >
                                 <Shield className="mr-2 h-4 w-4" />
-                                Tornar Tech Lead
+                                Tornar {getRoleLabel("tech_lead")}
                               </DropdownMenuItem>
                               <DropdownMenuItem
                                 onClick={() =>
@@ -547,8 +561,39 @@ export default function Team() {
                                 }
                               >
                                 <Shield className="mr-2 h-4 w-4" />
-                                Tornar Developer
+                                Tornar {getRoleLabel("developer")}
                               </DropdownMenuItem>
+                              <DropdownMenuItem
+                                onClick={() =>
+                                  updateRoleMutation.mutate({
+                                    memberId: member.id,
+                                    newRole: "viewer",
+                                  })
+                                }
+                              >
+                                <Shield className="mr-2 h-4 w-4" />
+                                Tornar {getRoleLabel("viewer")}
+                              </DropdownMenuItem>
+                              {customRoles.length > 0 && (
+                                <>
+                                  <DropdownMenuSeparator />
+                                  {customRoles.map((customRole) => (
+                                    <DropdownMenuItem
+                                      key={customRole.id}
+                                      onClick={() =>
+                                        updateRoleMutation.mutate({
+                                          memberId: member.id,
+                                          newRole: 'custom',
+                                          customRoleName: customRole.role_name,
+                                        })
+                                      }
+                                    >
+                                      <Shield className="mr-2 h-4 w-4" />
+                                      {customRole.role_name}
+                                    </DropdownMenuItem>
+                                  ))}
+                                </>
+                              )}
                               <DropdownMenuItem
                                 className="text-destructive"
                                 onClick={() => removeMemberMutation.mutate(member.id)}

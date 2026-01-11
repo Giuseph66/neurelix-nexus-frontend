@@ -11,7 +11,11 @@ const SUPABASE_PUBLISHABLE_KEY = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY;
 export const supabase = createClient<Database>(SUPABASE_URL, SUPABASE_PUBLISHABLE_KEY, {
   auth: {
     storage: localStorage,
-    persistSession: true,
-    autoRefreshToken: true,
+    // Supabase auth is deprecated in this repo (migrated to local backend JWT).
+    // Keep the client only to avoid breaking legacy imports, but do NOT keep
+    // background refresh timers running.
+    persistSession: false,
+    autoRefreshToken: false,
+    detectSessionInUrl: false,
   }
 });

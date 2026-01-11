@@ -1,5 +1,5 @@
 import { useState, useMemo } from 'react';
-import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { useParams, useNavigate, useLocation, useSearchParams } from 'react-router-dom';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -28,25 +28,55 @@ export function PRList() {
   const { repoId } = useParams<{ repoId: string }>();
   const location = useLocation();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   
   // Extrair projectId da URL: /project/:projectId/code/...
   const projectIdMatch = location.pathname.match(/\/project\/([^/]+)/);
   const projectId = projectIdMatch ? projectIdMatch[1] : undefined;
-  const [stateFilter, setStateFilter] = useState<'open' | 'closed' | 'all'>('open');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [authorFilter, setAuthorFilter] = useState<string>('');
+  
+  const stateFilter = (searchParams.get('state') as 'open' | 'closed' | 'merged' | 'all') || 'open';
+  const searchQuery = searchParams.get('q') || '';
+  const authorFilter = searchParams.get('author') || '';
 
-  console.log('PRList render:', { repoId, projectId, location: location.pathname });
+  const setStateFilter = (v: string) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      next.set('state', v);
+      return next;
+    });
+  };
+
+  const setSearchQuery = (v: string) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (v) next.set('q', v);
+      else next.delete('q');
+      return next;
+    });
+  };
+
+  const setAuthorFilter = (v: string) => {
+    setSearchParams(prev => {
+      const next = new URLSearchParams(prev);
+      if (v && v !== '__all__') next.set('author', v);
+      else next.delete('author');
+      return next;
+    });
+  };
 
   const { data, isLoading, error } = usePRs(repoId, {
-    state: stateFilter === 'all' ? undefined : stateFilter,
+    state: stateFilter === 'all' ? 'all' : (stateFilter === 'merged' ? 'closed' : stateFilter),
     search: searchQuery || undefined,
     author: authorFilter || undefined,
   });
 
-  console.log('PRList data:', { data, isLoading, error, repoId });
-
-  const prs = data?.prs || [];
+  const prs = useMemo(() => {
+    let list = data?.prs || [];
+    if (stateFilter === 'merged') {
+      return list.filter(pr => !!pr.merged_at);
+    }
+    return list;
+  }, [data?.prs, stateFilter]);
 
   // Extrair autores únicos para filtro
   const authors = useMemo(() => {
@@ -164,6 +194,7 @@ export function PRList() {
         <Tabs value={stateFilter} onValueChange={(v) => setStateFilter(v as typeof stateFilter)}>
           <TabsList>
             <TabsTrigger value="open">Abertos</TabsTrigger>
+            <TabsTrigger value="merged">Mesclados</TabsTrigger>
             <TabsTrigger value="closed">Fechados</TabsTrigger>
             <TabsTrigger value="all">Todos</TabsTrigger>
           </TabsList>
@@ -175,6 +206,8 @@ export function PRList() {
                 <p className="text-muted-foreground">
                   {stateFilter === 'open' 
                     ? 'Nenhum Pull Request aberto' 
+                    : stateFilter === 'merged'
+                    ? 'Nenhum Pull Request mesclado'
                     : stateFilter === 'closed'
                     ? 'Nenhum Pull Request fechado'
                     : 'Nenhum Pull Request encontrado'}

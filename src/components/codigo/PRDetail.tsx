@@ -23,13 +23,16 @@ import {
   X,
   MessageCircle,
 } from 'lucide-react';
-import { usePR, useSubmitReview, useCreatePRComment, useMergePR, useResolveThread, useAddReaction } from '@/hooks/usePRs';
+import { usePR, useSubmitReview, useDeleteMyLocalReview, useCreatePRComment, useMergePR, useResolveThread, useAddReaction } from '@/hooks/usePRs';
+import { useAuth } from '@/contexts/AuthContext';
+import { toast } from 'sonner';
 import { formatDistanceToNow, format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { Textarea } from '@/components/ui/textarea';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from '@/components/ui/dialog';
 import { DiffViewer } from '@/components/codigo/DiffViewer';
 import { useCreateInlineComment } from '@/hooks/usePRs';
+import type { PullRequest } from '@/types/codigo';
 
 export function PRDetail() {
   const { repoId, prNumber: prNumberStr } = useParams<{
@@ -40,6 +43,7 @@ export function PRDetail() {
   const navigate = useNavigate();
   const prNumber = prNumberStr ? parseInt(prNumberStr, 10) : undefined;
   const [activeTab, setActiveTab] = useState('commits');
+  const { user } = useAuth();
 
   // Extrair projectId da URL: /project/:projectId/code/...
   const projectIdMatch = location.pathname.match(/\/project\/([^/]+)/);
@@ -47,6 +51,7 @@ export function PRDetail() {
 
   const { data, isLoading, error } = usePR(repoId, prNumber);
   const submitReview = useSubmitReview();
+  const deleteMyLocalReview = useDeleteMyLocalReview();
   const createComment = useCreatePRComment();
   const createInlineComment = useCreateInlineComment();
   const resolveThread = useResolveThread();
@@ -89,7 +94,22 @@ export function PRDetail() {
     );
   }
 
-  const { pr, linked_tarefas } = data;
+  type PullRequestDetail = PullRequest & {
+    commits?: any[];
+    files?: any[];
+    comments?: any;
+  };
+
+  const { pr: prRaw, linked_tarefas } = data;
+  const pr = prRaw as PullRequestDetail;
+  const canResolveThreads = !!user?.id && !!pr.owner_user_id && pr.owner_user_id === user.id;
+  // Removemos a verificação de isAuthor no frontend - o GitHub já bloqueia aprovar seu próprio PR na API
+
+  const myLocalReview = (pr.reviews || []).find((r: any) => {
+    if (!user?.id) return false;
+    return typeof r?.id === 'string' && r.id.startsWith('local:') && r.reviewer_user_id === user.id;
+  });
+  const iApproved = myLocalReview?.state === 'APPROVED';
 
   const getStateBadge = () => {
     if (pr.state === 'MERGED') {
@@ -145,6 +165,11 @@ export function PRDetail() {
                   Atualizado {formatDistanceToNow(new Date(pr.updated_at), { addSuffix: true, locale: ptBR })}
                 </span>
               )}
+              {pr.merged_at && (
+                <span className="text-purple-600 font-medium">
+                  Mesclado {formatDistanceToNow(new Date(pr.merged_at), { addSuffix: true, locale: ptBR })}
+                </span>
+              )}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -153,72 +178,116 @@ export function PRDetail() {
                 <Dialog open={reviewDialogOpen} onOpenChange={setReviewDialogOpen}>
                   <DialogTrigger asChild>
                     <Button
-                      variant="outline"
+                      variant={iApproved ? 'default' : 'outline'}
+                      className={iApproved ? 'bg-green-600 hover:bg-green-700' : undefined}
                       onClick={() => {
-                        setReviewState('APPROVED');
-                        setReviewBody('');
+                        if (!iApproved) {
+                          setReviewState('APPROVED');
+                          setReviewBody('');
+                        }
                       }}
                     >
                       <CheckCircle2 className="h-4 w-4 mr-2" />
-                      Aprovar
+                      {iApproved ? 'Aprovado' : 'Aprovar'}
                     </Button>
                   </DialogTrigger>
                   <DialogContent>
                     <DialogHeader>
-                      <DialogTitle>Submeter Review</DialogTitle>
+                      <DialogTitle>{iApproved ? 'Desaprovar' : 'Submeter Review'}</DialogTitle>
+                      <DialogDescription>
+                        {iApproved
+                          ? 'Isso remove sua aprovação local no Neurelix (não altera o GitHub).'
+                          : 'Escolha o tipo de revisão e adicione seus comentários sobre as alterações propostas.'}
+                      </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4">
-                      <div className="flex gap-2">
-                        <Button
-                          variant={reviewState === 'APPROVED' ? 'default' : 'outline'}
-                          onClick={() => setReviewState('APPROVED')}
-                        >
-                          <CheckCircle2 className="h-4 w-4 mr-2" />
-                          Aprovar
-                        </Button>
-                        <Button
-                          variant={reviewState === 'CHANGES_REQUESTED' ? 'default' : 'outline'}
-                          onClick={() => setReviewState('CHANGES_REQUESTED')}
-                        >
-                          <XCircle className="h-4 w-4 mr-2" />
-                          Solicitar alterações
-                        </Button>
-                        <Button
-                          variant={reviewState === 'COMMENTED' ? 'default' : 'outline'}
-                          onClick={() => setReviewState('COMMENTED')}
-                        >
-                          <MessageCircle className="h-4 w-4 mr-2" />
-                          Comentar
-                        </Button>
-                      </div>
-                      <Textarea
-                        placeholder="Adicione um comentário (opcional)"
-                        value={reviewBody}
-                        onChange={(e) => setReviewBody(e.target.value)}
-                        rows={4}
-                      />
-                      <div className="flex justify-end gap-2">
-                        <Button variant="outline" onClick={() => setReviewDialogOpen(false)}>
-                          Cancelar
-                        </Button>
-                        <Button
-                          onClick={async () => {
-                            if (repoId && prNumber) {
-                              await submitReview.mutateAsync({
-                                repoId,
-                                prNumber,
-                                state: reviewState,
-                                body: reviewBody || undefined,
-                              });
+                      {iApproved ? (
+                        <div className="flex justify-end gap-2">
+                          <Button variant="outline" onClick={() => setReviewDialogOpen(false)}>
+                            Cancelar
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            onClick={async () => {
+                              if (!repoId || !prNumber) return;
+                              await deleteMyLocalReview.mutateAsync({ repoId, prNumber });
                               setReviewDialogOpen(false);
-                              setReviewBody('');
+                            }}
+                            disabled={deleteMyLocalReview.isPending}
+                          >
+                            {deleteMyLocalReview.isPending ? 'Removendo...' : 'Desaprovar'}
+                          </Button>
+                        </div>
+                      ) : (
+                        <>
+                          <div className="flex gap-2">
+                            <Button
+                              variant={reviewState === 'APPROVED' ? 'default' : 'outline'}
+                              onClick={() => setReviewState('APPROVED')}
+                            >
+                              <CheckCircle2 className="h-4 w-4 mr-2" />
+                              Aprovar
+                            </Button>
+                            <Button
+                              variant={reviewState === 'CHANGES_REQUESTED' ? 'default' : 'outline'}
+                              onClick={() => setReviewState('CHANGES_REQUESTED')}
+                            >
+                              <XCircle className="h-4 w-4 mr-2" />
+                              Solicitar alterações
+                            </Button>
+                            <Button
+                              variant={reviewState === 'COMMENTED' ? 'default' : 'outline'}
+                              onClick={() => setReviewState('COMMENTED')}
+                            >
+                              <MessageCircle className="h-4 w-4 mr-2" />
+                              Comentar
+                            </Button>
+                          </div>
+
+                          <Textarea
+                            placeholder={
+                              reviewState === 'CHANGES_REQUESTED'
+                                ? 'Descreva as alterações necessárias (obrigatório)'
+                                : 'Adicione um comentário (opcional)'
                             }
-                          }}
-                          disabled={submitReview.isPending}
-                        >
-                          {submitReview.isPending ? 'Enviando...' : 'Submeter'}
-                        </Button>
-                      </div>
+                            value={reviewBody}
+                            onChange={(e) => setReviewBody(e.target.value)}
+                            rows={4}
+                          />
+
+                          <div className="flex justify-end gap-2">
+                            <Button variant="outline" onClick={() => setReviewDialogOpen(false)}>
+                              Cancelar
+                            </Button>
+                            <Button
+                              onClick={async () => {
+                                if (repoId && prNumber) {
+                                  if (reviewState === 'CHANGES_REQUESTED' && !reviewBody.trim()) {
+                                    toast.error('É necessário descrever as alterações solicitadas.');
+                                    return;
+                                  }
+                                  try {
+                                    await submitReview.mutateAsync({
+                                      repoId,
+                                      prNumber,
+                                      state: reviewState,
+                                      body: reviewBody || undefined,
+                                    });
+                                    setReviewDialogOpen(false);
+                                    setReviewBody('');
+                                  } catch (error: any) {
+                                    // O erro já é tratado pelo hook, mas podemos adicionar log aqui se necessário
+                                    console.error('Error submitting review:', error);
+                                  }
+                                }
+                              }}
+                              disabled={submitReview.isPending || (reviewState === 'CHANGES_REQUESTED' && !reviewBody.trim())}
+                            >
+                              {submitReview.isPending ? 'Enviando...' : 'Submeter'}
+                            </Button>
+                          </div>
+                        </>
+                      )}
                     </div>
                   </DialogContent>
                 </Dialog>
@@ -232,6 +301,9 @@ export function PRDetail() {
                   <DialogContent>
                     <DialogHeader>
                       <DialogTitle>Adicionar Comentário</DialogTitle>
+                      <DialogDescription>
+                        Envie um comentário geral sobre este Pull Request.
+                      </DialogDescription>
                     </DialogHeader>
                     <div className="space-y-4">
                       <Textarea
@@ -432,6 +504,7 @@ export function PRDetail() {
                     comments={pr.comments?.inline || []}
                     selectedFile={selectedFile}
                     onFileSelect={setSelectedFile}
+                    canResolveThreads={canResolveThreads}
                     draftLine={draftLine}
                     onLineClick={(file, line, side) => {
                       if (line === 0) {
@@ -440,7 +513,7 @@ export function PRDetail() {
                         setDraftLine({ file, line, side });
                       }
                     }}
-                    onReplyComment={async (threadId, body) => {
+                    onReplyComment={async (threadId, body, context) => {
                       if (repoId && prNumber) {
                         if (threadId === 'NEW_THREAD' && draftLine) {
                           // Create new inline comment
@@ -459,10 +532,10 @@ export function PRDetail() {
                             repoId,
                             prNumber,
                             body,
-                            path: '', // Not needed for reply
-                            line: 0, // Not needed for reply
-                            side: 'LEFT', // Not needed for reply
-                            in_reply_to_id: threadId
+                            path: context?.path || '',
+                            line: context?.line_number || 0,
+                            side: context?.side || 'RIGHT',
+                            in_reply_to_id: threadId,
                           });
                         }
                       }

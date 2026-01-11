@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Badge } from '@/components/ui/badge';
-import { Search, Github, Lock, Globe, Loader2, CheckCircle2 } from 'lucide-react';
+import { Search, Github, Lock, Globe, Loader2, CheckCircle2, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useAvailableRepos, useSelectRepos, type AvailableRepo } from '@/hooks/useSelectRepos';
 import { useGitHubConnection } from '@/hooks/useGitHubOAuth';
 
@@ -14,12 +14,15 @@ interface SelectReposPageProps {
   projectId: string;
 }
 
+const REPOS_PER_PAGE = 20;
+
 export function SelectReposPage({ projectId }: SelectReposPageProps) {
   const navigate = useNavigate();
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedOrg, setSelectedOrg] = useState<string>('__all__');
   const [selectedRepos, setSelectedRepos] = useState<Set<string>>(new Set());
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
 
   const { data: connection } = useGitHubConnection(projectId);
   const { data, isLoading, error } = useAvailableRepos(projectId, {
@@ -85,19 +88,34 @@ export function SelectReposPage({ projectId }: SelectReposPageProps) {
   };
 
   const filteredRepos = useMemo(() => {
-    if (!searchQuery && selectedOrg === '__all__') return repos;
+    let filtered = repos;
     
-    return repos.filter((repo) => {
-      const matchesSearch = !searchQuery || 
-        repo.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        repo.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        repo.description?.toLowerCase().includes(searchQuery.toLowerCase());
-      
-      const matchesOrg = selectedOrg === '__all__' || repo.owner === selectedOrg;
-      
-      return matchesSearch && matchesOrg;
-    });
+    if (searchQuery || selectedOrg !== '__all__') {
+      filtered = repos.filter((repo) => {
+        const matchesSearch = !searchQuery || 
+          repo.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          repo.fullName.toLowerCase().includes(searchQuery.toLowerCase()) ||
+          repo.description?.toLowerCase().includes(searchQuery.toLowerCase());
+        
+        const matchesOrg = selectedOrg === '__all__' || repo.owner === selectedOrg;
+        
+        return matchesSearch && matchesOrg;
+      });
+    }
+    
+    return filtered;
   }, [repos, searchQuery, selectedOrg]);
+
+  // Paginação
+  const totalPages = Math.ceil(filteredRepos.length / REPOS_PER_PAGE);
+  const startIndex = (currentPage - 1) * REPOS_PER_PAGE;
+  const endIndex = startIndex + REPOS_PER_PAGE;
+  const paginatedRepos = filteredRepos.slice(startIndex, endIndex);
+
+  // Resetar página quando filtros mudarem
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchQuery, selectedOrg]);
 
   if (isLoading) {
     return (
@@ -121,9 +139,9 @@ export function SelectReposPage({ projectId }: SelectReposPageProps) {
   }
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col overflow-hidden">
       {/* Header */}
-      <div className="border-b p-6">
+      <div className="border-b p-6 flex-shrink-0">
         <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-2xl font-semibold">Selecione os repositórios</h1>
@@ -170,9 +188,6 @@ export function SelectReposPage({ projectId }: SelectReposPageProps) {
           <Button variant="outline" size="sm" onClick={handleDeselectAll}>
             Desmarcar todos
           </Button>
-          <Badge variant="secondary" className="ml-auto">
-            {selectedRepos.size} selecionado{selectedRepos.size !== 1 ? 's' : ''}
-          </Badge>
         </div>
       </div>
 
@@ -186,63 +201,126 @@ export function SelectReposPage({ projectId }: SelectReposPageProps) {
             </p>
           </div>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {filteredRepos.map((repo: AvailableRepo) => (
-              <Card
-                key={repo.fullName}
-                className={`cursor-pointer transition-all hover:border-primary ${
-                  selectedRepos.has(repo.fullName) ? 'border-primary bg-primary/5' : ''
-                }`}
-                onClick={() => handleToggleRepo(repo.fullName)}
-              >
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <CardTitle className="text-base flex items-center gap-2">
-                        <Github className="h-4 w-4" />
-                        {repo.name}
-                      </CardTitle>
-                      <CardDescription className="mt-1 text-xs">
-                        {repo.owner}
-                      </CardDescription>
+          <>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+              {paginatedRepos.map((repo: AvailableRepo) => (
+                <Card
+                  key={repo.fullName}
+                  className={`cursor-pointer transition-all hover:border-primary ${
+                    selectedRepos.has(repo.fullName) ? 'border-primary bg-primary/5' : ''
+                  }`}
+                  onClick={() => handleToggleRepo(repo.fullName)}
+                >
+                  <CardHeader className="pb-3">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <CardTitle className="text-base flex items-center gap-2">
+                          <Github className="h-4 w-4" />
+                          {repo.name}
+                        </CardTitle>
+                        <CardDescription className="mt-1 text-xs">
+                          {repo.owner}
+                        </CardDescription>
+                      </div>
+                      <Checkbox
+                        checked={selectedRepos.has(repo.fullName)}
+                        onCheckedChange={() => handleToggleRepo(repo.fullName)}
+                        onClick={(e) => e.stopPropagation()}
+                      />
                     </div>
-                    <Checkbox
-                      checked={selectedRepos.has(repo.fullName)}
-                      onCheckedChange={() => handleToggleRepo(repo.fullName)}
-                      onClick={(e) => e.stopPropagation()}
-                    />
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
-                    {repo.description || 'Sem descrição'}
-                  </p>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    {repo.private ? (
-                      <Lock className="h-3 w-3" />
-                    ) : (
-                      <Globe className="h-3 w-3" />
-                    )}
-                    <span>{repo.defaultBranch}</span>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
+                  </CardHeader>
+                  <CardContent>
+                    <p className="text-sm text-muted-foreground line-clamp-2 mb-3">
+                      {repo.description || 'Sem descrição'}
+                    </p>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {repo.private ? (
+                        <Lock className="h-3 w-3" />
+                      ) : (
+                        <Globe className="h-3 w-3" />
+                      )}
+                      <span>{repo.defaultBranch}</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+
+            {/* Paginação */}
+            {totalPages > 1 && (
+              <div className="flex items-center justify-center gap-2 mt-6">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  disabled={currentPage === 1}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  Anterior
+                </Button>
+                
+                <div className="flex items-center gap-1">
+                  {Array.from({ length: Math.min(5, totalPages) }, (_, i) => {
+                    let pageNum: number;
+                    if (totalPages <= 5) {
+                      pageNum = i + 1;
+                    } else if (currentPage <= 3) {
+                      pageNum = i + 1;
+                    } else if (currentPage >= totalPages - 2) {
+                      pageNum = totalPages - 4 + i;
+                    } else {
+                      pageNum = currentPage - 2 + i;
+                    }
+                    
+                    return (
+                      <Button
+                        key={pageNum}
+                        variant={currentPage === pageNum ? 'default' : 'outline'}
+                        size="sm"
+                        onClick={() => setCurrentPage(pageNum)}
+                        className="min-w-[40px]"
+                      >
+                        {pageNum}
+                      </Button>
+                    );
+                  })}
+                </div>
+
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  disabled={currentPage === totalPages}
+                >
+                  Próxima
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+              </div>
+            )}
+
+            <div className="text-center text-sm text-muted-foreground mt-4">
+              Mostrando {startIndex + 1}-{Math.min(endIndex, filteredRepos.length)} de {filteredRepos.length} repositórios
+            </div>
+          </>
         )}
       </div>
 
-      {/* Footer */}
-      <div className="border-t p-4 bg-background">
+      {/* Footer Fixo */}
+      <div className="border-t bg-background p-4 flex-shrink-0">
         <div className="flex items-center justify-between">
-          <div className="text-sm text-muted-foreground">
-            {selectedRepos.size > 0 ? (
-              <span>
-                {selectedRepos.size} repositório{selectedRepos.size !== 1 ? 's' : ''} selecionado{selectedRepos.size !== 1 ? 's' : ''}
-              </span>
-            ) : (
-              <span>Selecione pelo menos um repositório</span>
-            )}
+          <div className="flex items-center gap-4">
+            <Badge variant="secondary">
+              {selectedRepos.size} selecionado{selectedRepos.size !== 1 ? 's' : ''}
+            </Badge>
+            <span className="text-sm text-muted-foreground">
+              {selectedRepos.size > 0 ? (
+                <>
+                  {selectedRepos.size} repositório{selectedRepos.size !== 1 ? 's' : ''} selecionado{selectedRepos.size !== 1 ? 's' : ''}
+                </>
+              ) : (
+                'Selecione pelo menos um repositório'
+              )}
+            </span>
           </div>
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => navigate(`/project/${projectId}/code`)}>

@@ -1,8 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { apiFetch } from '@/lib/api';
 import { toast } from 'sonner';
-
-const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 
 export interface AvailableRepo {
   fullName: string;
@@ -28,27 +26,12 @@ export function useAvailableRepos(
     queryFn: async () => {
       if (!projectId) return { repos: [], orgs: [] };
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
       const params = new URLSearchParams();
       params.append('projectId', projectId);
       if (filters?.org) params.append('org', filters.org);
       if (filters?.search) params.append('search', filters.search);
 
-      const response = await fetch(`${FUNCTIONS_URL}/github-repos/available?${params.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to fetch available repos');
-      }
-
-      const data = await response.json();
+      const data = await apiFetch(`/functions/v1/github-repos/available?${params.toString()}`, { auth: true });
       return data as { repos: AvailableRepo[]; orgs: string[]; nextCursor?: string };
     },
     enabled: !!projectId,
@@ -69,30 +52,18 @@ export function useSelectRepos() {
       projectId: string;
       selectedFullNames: string[];
     }) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-repos/select`, {
+      const data = await apiFetch('/functions/v1/github-repos/select', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ projectId, selectedFullNames }),
+        body: { projectId, selectedFullNames },
+        auth: true,
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to select repos');
-      }
-
-      return await response.json();
+      return data;
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['available-repos', variables.projectId] });
       queryClient.invalidateQueries({ queryKey: ['selected-repos', variables.projectId] });
       queryClient.invalidateQueries({ queryKey: ['repos', variables.projectId] });
-      toast.success(`${data.selected.length} repositórios selecionados!`);
+      toast.success(`${data.selected?.length || 0} repositórios selecionados!`);
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Erro ao selecionar repositórios');
@@ -109,22 +80,7 @@ export function useSelectedRepos(projectId: string | undefined) {
     queryFn: async () => {
       if (!projectId) return { repos: [] };
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-repos/selected?projectId=${projectId}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to fetch selected repos');
-      }
-
-      const data = await response.json();
+      const data = await apiFetch(`/functions/v1/github-repos/selected?projectId=${projectId}`, { auth: true });
       return data as { repos: any[] };
     },
     enabled: !!projectId,

@@ -4,6 +4,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -68,6 +69,9 @@ export function CreateTarefaDialog({
         <form onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle>Criar Nova Tarefa</DialogTitle>
+            <DialogDescription>
+              Preencha os campos abaixo para criar uma tarefa no projeto.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-4">
@@ -77,17 +81,23 @@ export function CreateTarefaDialog({
                 Tipo
               </Label>
               <Select value={type} onValueChange={(v) => setType(v as TarefaType)}>
-                <SelectTrigger className="col-span-3">
-                  <SelectValue />
+                <SelectTrigger className="col-span-3 flex items-center gap-2">
+                  {type && (() => {
+                    const config = TYPE_CONFIG[type];
+                    const Icon = config.icon;
+                    return (
+                      <>
+                        <Icon className="h-4 w-4 flex-shrink-0" style={{ color: config.color }} />
+                        <SelectValue>{config.label}</SelectValue>
+                      </>
+                    );
+                  })()}
                 </SelectTrigger>
                 <SelectContent>
                   {(Object.entries(TYPE_CONFIG) as [TarefaType, typeof TYPE_CONFIG[TarefaType]][]).map(
                     ([key, config]) => (
                       <SelectItem key={key} value={key}>
-                        <span className="flex items-center gap-2">
-                          <span>{config.icon}</span>
-                          <span>{config.label}</span>
-                        </span>
+                        {config.label}
                       </SelectItem>
                     )
                   )}
@@ -131,17 +141,23 @@ export function CreateTarefaDialog({
                 Prioridade
               </Label>
               <Select value={priority} onValueChange={(v) => setPriority(v as TarefaPriority)}>
-                <SelectTrigger className="col-span-3">
-                  <SelectValue />
+                <SelectTrigger className="col-span-3 flex items-center gap-2">
+                  {priority && (() => {
+                    const config = PRIORITY_CONFIG[priority];
+                    const Icon = config.icon;
+                    return (
+                      <>
+                        <Icon className="h-4 w-4 flex-shrink-0" style={{ color: config.color }} />
+                        <SelectValue>{config.label}</SelectValue>
+                      </>
+                    );
+                  })()}
                 </SelectTrigger>
                 <SelectContent>
                   {(Object.entries(PRIORITY_CONFIG) as [TarefaPriority, typeof PRIORITY_CONFIG[TarefaPriority]][]).map(
                     ([key, config]) => (
                       <SelectItem key={key} value={key}>
-                        <span className="flex items-center gap-2">
-                          <span>{config.icon}</span>
-                          <span>{config.label}</span>
-                        </span>
+                        {config.label}
                       </SelectItem>
                     )
                   )}

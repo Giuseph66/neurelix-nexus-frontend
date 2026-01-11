@@ -1,7 +1,22 @@
-import { useCallback, useEffect, useState, useRef } from 'react';
-import { Tldraw, TLRecord, Editor, TLStoreSnapshot } from 'tldraw';
+import { useCallback, useEffect, useState, useRef, useMemo } from 'react';
+import {
+  Tldraw,
+  Editor,
+  TLStoreSnapshot,
+  DefaultContextMenu,
+  DefaultContextMenuContent,
+  TldrawUiMenuGroup,
+  TldrawUiMenuItem,
+  type TLUiContextMenuProps,
+  type TLComponents,
+  useEditor,
+  useValue,
+} from 'tldraw';
+import { getSnapshot, loadSnapshot } from '@tldraw/editor';
 import 'tldraw/tldraw.css';
-import { supabase } from '@/integrations/supabase/client';
+import { apiFetch, ApiError } from '@/lib/api';
+import { getAccessToken } from '@/lib/authTokens';
+import { WhiteboardSocket } from '@/lib/realtime/whiteboardSocket';
 import { toast } from 'sonner';
 import { useSidebar } from '@/components/ui/sidebar';
 
@@ -13,8 +28,16 @@ const EPHEMERAL_PREFIXES = [
   'instance_page_state:',
 ] as const;
 
+const MAX_ANALYZE_SELECTION_CHARS = 999999999999;
+
 const isEphemeralId = (id: string) =>
   EPHEMERAL_PREFIXES.some((prefix) => id.startsWith(prefix));
+
+function getWsBaseUrl() {
+  const base = import.meta.env.VITE_API_URL as string | undefined;
+  if (!base) return null;
+  return base.replace(/^http/i, 'ws').replace(/\/$/, '');
+}
 
 interface TldrawWhiteboardProps {
   whiteboardId: string;
@@ -24,19 +47,95 @@ interface TldrawWhiteboardProps {
   drawerState?: boolean;
   isEditable?: boolean;
   onCanvasInteraction?: () => void;
+  onAnalyzeSelection?: (payload: { selectionJson: string; shapeCount: number }) => void;
 }
 
-export const TldrawWhiteboard = ({ whiteboardId, onEditorReady, commentMode = false, onCanvasClick, drawerState, isEditable = true, onCanvasInteraction }: TldrawWhiteboardProps) => {
+export const TldrawWhiteboard = ({
+  whiteboardId,
+  onEditorReady,
+  commentMode = false,
+  onCanvasClick,
+  drawerState,
+  isEditable = true,
+  onCanvasInteraction,
+  onAnalyzeSelection,
+}: TldrawWhiteboardProps) => {
   const [editor, setEditor] = useState<Editor | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const saveTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const isLoadingDataRef = useRef(false);
-  const broadcastChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
-  const broadcastTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const broadcastRAFRef = useRef<number | null>(null);
-  const pendingBroadcastRef = useRef<{ records: TLRecord[]; removedIds: string[] }>({ records: [], removedIds: [] });
-  const isDrawingRef = useRef(false);
-  const drawingEndTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const realtimeRef = useRef<WhiteboardSocket | null>(null);
+  const resyncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastSnapshotVersionRef = useRef<number>(-1);
+  const lastSnapshotKeyRef = useRef<string>('');
+  const dirtyRef = useRef(false);
+  const flushingRef = useRef(false);
+  const flushRequestedRef = useRef(false);
+  const clientIdRef = useRef<string>(
+    typeof crypto !== 'undefined' && 'randomUUID' in crypto
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2)
+  );
+
+  const handleAnalyzeSelection = useCallback(
+    async (editorInstance: Editor) => {
+      if (!onAnalyzeSelection) return;
+      const selectedIds = editorInstance.getSelectedShapeIds();
+      if (selectedIds.length === 0) {
+        toast.error('Selecione um ou mais elementos para enviar para a IA.');
+        return;
+      }
+
+      const content = await editorInstance.resolveAssetsInContent(
+        editorInstance.getContentFromCurrentPage(selectedIds)
+      );
+      const selectionJson = JSON.stringify(content);
+
+      if (selectionJson.length > MAX_ANALYZE_SELECTION_CHARS) {
+        toast.error('Foram selecionados muitos elementos. Selecione uma quantidade menor.');
+        return;
+      }
+
+      onAnalyzeSelection({ selectionJson, shapeCount: selectedIds.length });
+    },
+    [onAnalyzeSelection]
+  );
+
+  const ContextMenu = useCallback(
+    function ContextMenu(props: TLUiContextMenuProps) {
+      const menuEditor = useEditor();
+      const hasSelection = useValue(
+        'hasSelection',
+        () => menuEditor.getSelectedShapeIds().length > 0,
+        [menuEditor]
+      );
+
+      return (
+        <DefaultContextMenu {...props}>
+          <DefaultContextMenuContent />
+          {onAnalyzeSelection && (
+            <TldrawUiMenuGroup id="ai-analysis">
+              <TldrawUiMenuItem
+                id="ai-analyze-selection"
+                label="Enviar para IA analisar"
+                disabled={!hasSelection}
+                onSelect={() => {
+                  void handleAnalyzeSelection(menuEditor);
+                }}
+              />
+            </TldrawUiMenuGroup>
+          )}
+        </DefaultContextMenu>
+      );
+    },
+    [handleAnalyzeSelection, onAnalyzeSelection]
+  );
+
+  const components = useMemo<TLComponents>(
+    () => ({
+      ContextMenu,
+    }),
+    [ContextMenu]
+  );
 
   const filterSnapshot = useCallback((snapshot: TLStoreSnapshot): TLStoreSnapshot => {
     const s = snapshot as unknown as { store?: Record<string, unknown> };
@@ -52,32 +151,105 @@ export const TldrawWhiteboard = ({ whiteboardId, onEditorReady, commentMode = fa
     } as TLStoreSnapshot;
   }, []);
 
-  const filterRecordsForSync = useCallback(
-    (records: TLRecord[]) => records.filter((r) => r?.id && !isEphemeralId(String(r.id))),
-    []
-  );
+  const applyRemoteSnapshot = useCallback((snapshot: TLStoreSnapshot, version?: number) => {
+    if (!editor) return;
+
+    const nextVersion = typeof version === 'number' ? version : -1;
+    if (nextVersion !== -1 && nextVersion <= lastSnapshotVersionRef.current) {
+      console.log('[TldrawWhiteboard] Snapshot ignored (old version)', {
+        whiteboardId,
+        nextVersion,
+        lastVersion: lastSnapshotVersionRef.current,
+      });
+      return;
+    }
+
+    const filtered = filterSnapshot(snapshot);
+    const snapshotKey = JSON.stringify(filtered ?? {});
+    if (snapshotKey === lastSnapshotKeyRef.current && nextVersion <= lastSnapshotVersionRef.current) {
+      console.log('[TldrawWhiteboard] Snapshot ignored (same data)', {
+        whiteboardId,
+        version: nextVersion,
+        bytes: snapshotKey.length,
+      });
+      return;
+    }
+
+    isLoadingDataRef.current = true;
+    const camera = editor.getCamera();
+    loadSnapshot(editor.store, filtered);
+    if (camera) {
+      editor.setCamera(camera);
+    }
+    isLoadingDataRef.current = false;
+
+    lastSnapshotVersionRef.current =
+      nextVersion !== -1 ? Math.max(lastSnapshotVersionRef.current, nextVersion) : lastSnapshotVersionRef.current;
+    lastSnapshotKeyRef.current = snapshotKey;
+    console.log('[TldrawWhiteboard] Applied remote snapshot', {
+      whiteboardId,
+      version: nextVersion,
+      bytes: snapshotKey.length,
+    });
+  }, [editor, filterSnapshot, whiteboardId]);
+
+  const refreshSnapshotFromServer = useCallback(async (reason: string) => {
+    if (!editor) return;
+    try {
+      const data = await apiFetch<any>(`/whiteboards/${whiteboardId}`);
+      const serverVersion =
+        typeof data?.snapshot_version === 'number'
+          ? data.snapshot_version
+          : typeof data?.snapshot_version === 'string'
+            ? Number(data.snapshot_version)
+            : -1;
+
+      if (serverVersion > lastSnapshotVersionRef.current && data?.canvas_snapshot) {
+        console.log('[TldrawWhiteboard] Syncing snapshot from server', {
+          whiteboardId,
+          reason,
+          serverVersion,
+          localVersion: lastSnapshotVersionRef.current,
+        });
+        applyRemoteSnapshot(data.canvas_snapshot as TLStoreSnapshot, serverVersion);
+      } else {
+        console.log('[TldrawWhiteboard] Server snapshot already up to date', {
+          whiteboardId,
+          reason,
+          serverVersion,
+          localVersion: lastSnapshotVersionRef.current,
+        });
+      }
+    } catch (err) {
+      console.warn('[TldrawWhiteboard] Failed to refresh snapshot from server', {
+        whiteboardId,
+        reason,
+        err,
+      });
+    }
+  }, [applyRemoteSnapshot, editor, whiteboardId]);
 
   // Load saved data from database
   const loadWhiteboardData = useCallback(
     async (editorInstance: Editor) => {
       try {
         isLoadingDataRef.current = true;
-        const { data, error } = await supabase
-          .from('whiteboards')
-          .select('canvas_snapshot')
-          .eq('id', whiteboardId)
-          .maybeSingle();
+        const data = await apiFetch<any>(`/whiteboards/${whiteboardId}`);
 
-        if (error) {
-          console.error('[TldrawWhiteboard] Error loading whiteboard data:', error);
-          return;
+        if (typeof data?.snapshot_version === 'number') {
+          lastSnapshotVersionRef.current = data.snapshot_version;
         }
 
         if (data?.canvas_snapshot && typeof data.canvas_snapshot === 'object') {
           const snapshot = filterSnapshot(data.canvas_snapshot as unknown as TLStoreSnapshot);
+          lastSnapshotKeyRef.current = JSON.stringify(snapshot ?? {});
           if ((snapshot as any).store && Object.keys((snapshot as any).store).length > 0) {
-            editorInstance.store.loadSnapshot(snapshot);
-            console.log('[TldrawWhiteboard] Loaded snapshot from database');
+            loadSnapshot(editorInstance.store, snapshot);
+            console.log('[TldrawWhiteboard] Loaded snapshot from database', {
+              whiteboardId,
+              version: typeof data.snapshot_version === 'number' ? data.snapshot_version : null,
+              bytes: JSON.stringify(snapshot).length,
+            });
           }
         }
       } catch (e) {
@@ -90,70 +262,163 @@ export const TldrawWhiteboard = ({ whiteboardId, onEditorReady, commentMode = fa
     [filterSnapshot, whiteboardId]
   );
 
-  // Save data to database (debounced)
-  const saveWhiteboardData = useCallback(
-    async (editorInstance: Editor) => {
-      if (isLoadingDataRef.current) return;
+  // Realtime sync (WebSocket + periodic resync)
+  useEffect(() => {
+    if (!editor || !whiteboardId) return;
+
+    const realtime = new WhiteboardSocket(
+      {
+        whiteboardId,
+        clientId: clientIdRef.current,
+        getToken: getAccessToken,
+        getWsBaseUrl,
+        heartbeatMs: 20000,
+        pongTimeoutMs: 60000,
+        maxBufferedBytes: 2 * 1024 * 1024,
+      },
+      {
+        onStatus: (status, detail) => {
+          if (status === 'open') {
+            console.log('[TldrawWhiteboard] WS connected', { whiteboardId });
+            void refreshSnapshotFromServer('ws-open');
+            return;
+          }
+          if (status === 'connecting') {
+            console.log('[TldrawWhiteboard] WS connecting', { whiteboardId });
+            return;
+          }
+          if (status === 'closed') {
+            console.warn('[TldrawWhiteboard] WS closed', {
+              whiteboardId,
+              code: detail?.code,
+              reason: detail?.reason,
+            });
+          }
+        },
+        onSnapshot: (payload) => {
+          if (payload.clientId && payload.clientId === clientIdRef.current) return;
+          console.log('[TldrawWhiteboard] WS snapshot received', {
+            whiteboardId,
+            version: payload.version,
+            fromClientId: payload.clientId ?? null,
+          });
+          applyRemoteSnapshot(payload.snapshot as TLStoreSnapshot, payload.version);
+        },
+        onAck: (version) => {
+          if (version > lastSnapshotVersionRef.current) {
+            lastSnapshotVersionRef.current = version;
+          } else {
+            console.log('[TldrawWhiteboard] WS ack ignored (old)', {
+              whiteboardId,
+              version,
+              lastVersion: lastSnapshotVersionRef.current,
+            });
+          }
+          console.log('[TldrawWhiteboard] WS ack', { whiteboardId, version });
+        },
+        onError: (err) => {
+          console.warn('[TldrawWhiteboard] WS error', { whiteboardId, err });
+        },
+      }
+    );
+
+    realtimeRef.current = realtime;
+    realtime.connect();
+
+    resyncIntervalRef.current = setInterval(() => {
+      void refreshSnapshotFromServer('interval');
+    }, 30000);
+
+    return () => {
+      if (resyncIntervalRef.current) {
+        clearInterval(resyncIntervalRef.current);
+        resyncIntervalRef.current = null;
+      }
+      realtime.disconnect();
+      if (realtimeRef.current === realtime) {
+        realtimeRef.current = null;
+      }
+    };
+  }, [editor, whiteboardId, applyRemoteSnapshot, refreshSnapshotFromServer]);
+
+  const flushSnapshot = useCallback(
+    async (reason: string) => {
+      if (!editor) return;
       if (!whiteboardId) {
         console.warn('[TldrawWhiteboard] Cannot save: whiteboardId is missing');
         return;
       }
-
-      // Verificar se o usuário está autenticado
-      try {
-        const { data: { session }, error: authError } = await supabase.auth.getSession();
-        if (authError || !session) {
-          console.warn('[TldrawWhiteboard] Cannot save: user not authenticated', authError);
-          return;
-        }
-      } catch (authErr) {
-        console.warn('[TldrawWhiteboard] Error checking auth session:', authErr);
+      if (isLoadingDataRef.current) return;
+      if (!dirtyRef.current) return;
+      if (flushingRef.current) {
+        flushRequestedRef.current = true;
         return;
       }
 
-      try {
-        const snapshot = filterSnapshot(editorInstance.store.getSnapshot());
-        const snapshotJson = JSON.parse(JSON.stringify(snapshot));
+      flushingRef.current = true;
+      flushRequestedRef.current = false;
 
-        // Validar tamanho do snapshot (limite de ~5MB para jsonb no PostgreSQL)
-        const snapshotSize = JSON.stringify(snapshotJson).length;
+      try {
+        const snapshot = filterSnapshot(getSnapshot(editor.store).document as TLStoreSnapshot);
+        const snapshotJson = JSON.parse(JSON.stringify(snapshot));
+        const snapshotKey = JSON.stringify(snapshotJson ?? {});
+
+        if (snapshotKey === lastSnapshotKeyRef.current) {
+          dirtyRef.current = false;
+          return;
+        }
+
+        const snapshotSize = snapshotKey.length;
         if (snapshotSize > 4 * 1024 * 1024) {
           console.warn('[TldrawWhiteboard] Snapshot muito grande, pulando salvamento:', snapshotSize);
           return;
         }
 
-        const { error } = await supabase
-          .from('whiteboards')
-          .update({ canvas_snapshot: snapshotJson })
-          .eq('id', whiteboardId)
-          .select('id')
-          .maybeSingle();
+        lastSnapshotKeyRef.current = snapshotKey;
+        dirtyRef.current = false;
 
-        if (error) {
-          console.error('[TldrawWhiteboard] Error updating whiteboard data:', {
-            error,
-            message: error?.message,
-            details: error?.details,
-            hint: error?.hint,
-            code: error?.code,
+        const realtime = realtimeRef.current;
+        const sendResult = realtime?.sendSnapshot(snapshotJson);
+        if (sendResult?.sent) {
+          console.log('[TldrawWhiteboard] Sent snapshot via websocket', {
             whiteboardId,
+            bytes: snapshotSize,
+            bufferedAmount: sendResult.bufferedAmount ?? null,
+            reason,
           });
-          
-          // Não mostrar toast para erros de rede temporários
-          if (error.code === '42501' || error.message?.includes('permission')) {
-            toast.error('Sem permissão para editar este quadro. Você precisa ser developer, tech_lead ou admin.');
-          } else if (error.message?.includes('NetworkError') || error.message?.includes('fetch') || error.message?.includes('Failed to fetch')) {
-            // Erro de rede - apenas logar, não mostrar toast para não incomodar o usuário
-            // O salvamento será tentado novamente na próxima mudança
-            console.warn('[TldrawWhiteboard] Network error during save, will retry on next change');
-          } else {
-            // Outros erros - mostrar toast apenas uma vez
-            toast.error('Erro ao salvar quadro: ' + (error.message || 'Erro desconhecido'));
-          }
-        } else {
-          console.log('[TldrawWhiteboard] Saved snapshot to database');
+          return;
         }
+
+        console.log('[TldrawWhiteboard] WS not ready, saving via HTTP', {
+          whiteboardId,
+          bytes: snapshotSize,
+          reason: sendResult?.reason ?? 'no-ws',
+        });
+
+        const updated = await apiFetch<any>(`/whiteboards/${whiteboardId}`, {
+          method: 'PUT',
+          body: { canvas_snapshot: snapshotJson, clientId: clientIdRef.current },
+        });
+
+        const updatedVersion =
+          typeof updated?.snapshot_version === 'number'
+            ? updated.snapshot_version
+            : typeof updated?.snapshot_version === 'string'
+              ? Number(updated.snapshot_version)
+              : null;
+        if (updatedVersion !== null && !Number.isNaN(updatedVersion)) {
+          if (updatedVersion > lastSnapshotVersionRef.current) {
+            lastSnapshotVersionRef.current = updatedVersion;
+          }
+        }
+
+        console.log('[TldrawWhiteboard] Saved snapshot to database (http)', {
+          whiteboardId,
+          bytes: snapshotSize,
+          reason,
+        });
       } catch (e: any) {
+        dirtyRef.current = true;
         console.error('[TldrawWhiteboard] Error saving whiteboard:', {
           error: e,
           message: e?.message,
@@ -161,206 +426,67 @@ export const TldrawWhiteboard = ({ whiteboardId, onEditorReady, commentMode = fa
           stack: e?.stack,
           whiteboardId,
         });
-        
-        // Não mostrar toast para erros de rede (será tentado novamente)
+
         if (e?.name === 'NetworkError' || e?.message?.includes('fetch') || e?.message?.includes('Failed to fetch')) {
-          console.warn('[TldrawWhiteboard] Network error, will retry on next change');
+          console.warn('[TldrawWhiteboard] Network error, will retry on next interaction');
+        } else if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
+          toast.error('Sem permissão para editar este quadro. Você precisa ser developer, tech_lead ou admin.');
         } else {
           toast.error('Erro ao salvar quadro: ' + (e?.message || 'Erro desconhecido'));
         }
+      } finally {
+        flushingRef.current = false;
+        if (flushRequestedRef.current) {
+          void flushSnapshot('queued');
+        }
       }
     },
-    [filterSnapshot, whiteboardId]
+    [editor, filterSnapshot, whiteboardId]
   );
 
-  // Debounced save function
-  const debouncedSave = useCallback(
-    (editorInstance: Editor) => {
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
-      }
-      saveTimeoutRef.current = setTimeout(() => {
-        saveWhiteboardData(editorInstance);
-      }, 1000);
-    },
-    [saveWhiteboardData]
-  );
-
-  // Handle real-time sync (broadcast only)
+  // Mark dirty on any document change
   useEffect(() => {
-    if (!editor || !whiteboardId) return;
-
-    // Broadcast channel for immediate updates
-    // self:false prevents echoing our own messages back into the same tab.
-    const broadcastChannel = supabase
-      .channel(`broadcast-whiteboard-${whiteboardId}`, {
-        config: { broadcast: { self: false } },
-      })
-      .on('broadcast', { event: 'sync' }, (payload) => {
-        if (isLoadingDataRef.current) return;
-        if (payload.payload && payload.payload.records) {
-          try {
-            const records = filterRecordsForSync(payload.payload.records as TLRecord[]);
-            if (records.length === 0) return;
-
-            editor.store.mergeRemoteChanges(() => {
-              editor.store.put(records);
-            });
-            console.log('[TldrawWhiteboard] Synced records from broadcast');
-          } catch (e) {
-            console.error('[TldrawWhiteboard] Error syncing records:', e);
-          }
-        }
-      })
-      .on('broadcast', { event: 'delete' }, (payload) => {
-        if (isLoadingDataRef.current) return;
-        if (payload.payload && payload.payload.ids) {
-          try {
-            const ids = (payload.payload.ids as TLRecord['id'][]).map(String);
-            const filteredIds = ids.filter((id) => !isEphemeralId(id));
-            if (filteredIds.length === 0) return;
-
-            editor.store.mergeRemoteChanges(() => {
-              editor.store.remove(filteredIds as any);
-            });
-            console.log('[TldrawWhiteboard] Removed records from broadcast');
-          } catch (e) {
-            console.error('[TldrawWhiteboard] Error deleting records:', e);
-          }
-        }
-      })
-      .subscribe((status) => {
-        console.log('[TldrawWhiteboard] Broadcast subscription status:', status);
-      });
-
-    broadcastChannelRef.current = broadcastChannel;
-
-    // Listen to local changes
-    const unsubscribe = editor.store.listen(
-      (entry) => {
-        const { changes, source } = entry;
-        if (source !== 'user') return;
-        if (isLoadingDataRef.current) return;
-
-        const addedRecords = filterRecordsForSync(Object.values(changes.added));
-        const updatedRecords = filterRecordsForSync(
-          Object.values(changes.updated).map(([_, after]) => after)
-        );
-        const removedIds = Object.keys(changes.removed).filter((id) => !isEphemeralId(id));
-
-        // Detectar se está desenhando (shapes do tipo "draw" sendo atualizados)
-        const isDrawing = updatedRecords.some((r: any) => r?.typeName === 'shape' && r?.type === 'draw');
-        if (isDrawing) {
-          isDrawingRef.current = true;
-        }
-
-        // Função para enviar broadcast
-        const sendBroadcast = () => {
-          const { records, removedIds: pendingRemoved } = pendingBroadcastRef.current;
-          
-          if (records.length > 0) {
-            // Remover duplicatas mantendo a versão mais recente
-            const recordsMap = new Map<string, TLRecord>();
-            records.forEach((r) => {
-              const id = String(r.id);
-              recordsMap.set(id, r);
-            });
-            const uniqueRecords = Array.from(recordsMap.values());
-
-            broadcastChannel.send({
-              type: 'broadcast',
-              event: 'sync',
-              payload: { records: uniqueRecords },
-            });
-          }
-
-          if (pendingRemoved.length > 0) {
-            broadcastChannel.send({
-              type: 'broadcast',
-              event: 'delete',
-              payload: { ids: [...new Set(pendingRemoved)] },
-            });
-          }
-
-          // Limpar pendências
-          pendingBroadcastRef.current = { records: [], removedIds: [] };
-        };
-
-        // Acumular mudanças
-        if (addedRecords.length > 0 || updatedRecords.length > 0) {
-          pendingBroadcastRef.current.records.push(...addedRecords, ...updatedRecords);
-        }
-        if (removedIds.length > 0) {
-          pendingBroadcastRef.current.removedIds.push(...removedIds);
-        }
-
-        // Durante desenho: APENAS acumular, NÃO fazer broadcast
-        // Broadcast será feito quando o desenho terminar
-        if (isDrawing) {
-          // Cancelar qualquer timeout/RAF anterior
-          if (broadcastTimeoutRef.current) {
-            clearTimeout(broadcastTimeoutRef.current);
-            broadcastTimeoutRef.current = null;
-          }
-          if (broadcastRAFRef.current !== null) {
-            cancelAnimationFrame(broadcastRAFRef.current);
-            broadcastRAFRef.current = null;
-          }
-          
-          // Limpar timeout anterior de fim de desenho
-          if (drawingEndTimeoutRef.current) {
-            clearTimeout(drawingEndTimeoutRef.current);
-          }
-          
-          // Agendar broadcast e salvamento quando o desenho terminar (200ms sem atualizações)
-          drawingEndTimeoutRef.current = setTimeout(() => {
-            // Fazer broadcast de todas as mudanças acumuladas
-            sendBroadcast();
-            
-            // Salvar no banco
-            isDrawingRef.current = false;
-            debouncedSave(editor);
-            
-            drawingEndTimeoutRef.current = null;
-          }, 200); // 200ms após a última atualização de desenho
-        } else {
-          // Para mudanças não relacionadas a desenho: broadcast e salvamento imediato
-          // Cancelar RAF se existir
-          if (broadcastRAFRef.current !== null) {
-            cancelAnimationFrame(broadcastRAFRef.current);
-            broadcastRAFRef.current = null;
-          }
-          
-          // Enviar broadcast imediatamente
-          sendBroadcast();
-          
-          // Salvar no banco (com debounce)
-          debouncedSave(editor);
-        }
-      },
-      { scope: 'document', source: 'user' }
-    );
+    if (!editor) return;
+    const unsubscribe = editor.store.listen(() => {
+      if (isLoadingDataRef.current) return;
+      dirtyRef.current = true;
+    }, { scope: 'document' });
 
     return () => {
       unsubscribe();
-      if (broadcastChannelRef.current) {
-        supabase.removeChannel(broadcastChannelRef.current);
-        broadcastChannelRef.current = null;
+    };
+  }, [editor]);
+
+  // Flush snapshot on interaction end (pointer up / key up / complete)
+  useEffect(() => {
+    if (!editor) return;
+
+    const handleEvent = (info: any) => {
+      if (!dirtyRef.current) return;
+
+      if (info?.type === 'pointer' && info?.name === 'pointer_up') {
+        void flushSnapshot('pointer_up');
+        return;
       }
-      if (saveTimeoutRef.current) {
-        clearTimeout(saveTimeoutRef.current);
+
+      if (info?.type === 'keyboard' && info?.name === 'key_up') {
+        const key = String(info.key || '');
+        if (['Backspace', 'Delete', 'Enter', 'Escape', 'Tab'].includes(key) || info.ctrlKey) {
+          void flushSnapshot(`key_up:${key || info.code || 'ctrl'}`);
+        }
+        return;
       }
-      if (broadcastTimeoutRef.current) {
-        clearTimeout(broadcastTimeoutRef.current);
-      }
-      if (broadcastRAFRef.current !== null) {
-        cancelAnimationFrame(broadcastRAFRef.current);
-      }
-      if (drawingEndTimeoutRef.current) {
-        clearTimeout(drawingEndTimeoutRef.current);
+
+      if (info?.type === 'misc' && (info?.name === 'complete' || info?.name === 'interrupt')) {
+        void flushSnapshot(info.name);
       }
     };
-  }, [editor, whiteboardId, debouncedSave, filterRecordsForSync]);
+
+    editor.on('event', handleEvent);
+    return () => {
+      editor.off('event', handleEvent);
+    };
+  }, [editor, flushSnapshot]);
 
   // Handle canvas clicks for comment mode via pointer events
   useEffect(() => {
@@ -569,6 +695,7 @@ export const TldrawWhiteboard = ({ whiteboardId, onEditorReady, commentMode = fa
           onMount={handleMount}
           inferDarkMode={false}
           forceMobile={false}
+          components={components}
         />
       </div>
       <style>{`
@@ -602,4 +729,3 @@ export const TldrawWhiteboard = ({ whiteboardId, onEditorReady, commentMode = fa
 };
 
 export default TldrawWhiteboard;
-

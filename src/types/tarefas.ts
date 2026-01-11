@@ -1,3 +1,17 @@
+import { 
+  Flame,
+  AlertCircle,
+  Equal,
+  Minus,
+  CircleDashed,
+  Zap,
+  BookOpen,
+  CheckSquare,
+  ListTree,
+  Bug,
+  type LucideIcon
+} from 'lucide-react';
+
 // Types for the Tarefas (Gira/Jira-like) module
 
 export type BoardType = 'KANBAN' | 'SCRUM';
@@ -181,6 +195,7 @@ export interface CreateTarefaInput {
 export interface UpdateTarefaInput {
   title?: string;
   description?: string;
+  type?: TarefaType;
   priority?: TarefaPriority;
   assignee_id?: string | null;
   epic_id?: string | null;
@@ -206,18 +221,18 @@ export interface CreateCommentInput {
 }
 
 // Priority display helpers
-export const PRIORITY_CONFIG: Record<TarefaPriority, { label: string; color: string; icon: string }> = {
-  HIGHEST: { label: 'Highest', color: '#DC2626', icon: '⬆️⬆️' },
-  HIGH: { label: 'High', color: '#EA580C', icon: '⬆️' },
-  MEDIUM: { label: 'Medium', color: '#CA8A04', icon: '➡️' },
-  LOW: { label: 'Low', color: '#16A34A', icon: '⬇️' },
-  LOWEST: { label: 'Lowest', color: '#0D9488', icon: '⬇️⬇️' },
+export const PRIORITY_CONFIG: Record<TarefaPriority, { label: string; color: string; icon: LucideIcon }> = {
+  HIGHEST: { label: 'Máxima', color: '#EF4444', icon: Flame },
+  HIGH: { label: 'Alta', color: '#F97316', icon: AlertCircle },
+  MEDIUM: { label: 'Média', color: '#EAB308', icon: Equal },
+  LOW: { label: 'Baixa', color: '#22C55E', icon: Minus },
+  LOWEST: { label: 'Mínima', color: '#64748B', icon: CircleDashed },
 };
 
-export const TYPE_CONFIG: Record<TarefaType, { label: string; color: string; icon: string }> = {
-  EPIC: { label: 'Epic', color: '#7C3AED', icon: '⚡' },
-  STORY: { label: 'Story', color: '#10B981', icon: '📖' },
-  TASK: { label: 'Task', color: '#3B82F6', icon: '✓' },
-  SUBTASK: { label: 'Subtask', color: '#6B7280', icon: '○' },
-  BUG: { label: 'Bug', color: '#DC2626', icon: '🐛' },
+export const TYPE_CONFIG: Record<TarefaType, { label: string; color: string; icon: LucideIcon }> = {
+  EPIC: { label: 'Epic', color: '#7C3AED', icon: Zap },
+  STORY: { label: 'Story', color: '#10B981', icon: BookOpen },
+  TASK: { label: 'Task', color: '#3B82F6', icon: CheckSquare },
+  SUBTASK: { label: 'Subtask', color: '#6B7280', icon: ListTree },
+  BUG: { label: 'Bug', color: '#DC2626', icon: Bug },
 };

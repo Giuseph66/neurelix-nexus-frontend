@@ -9,6 +9,7 @@ import { useRepoTree, useRepoBlob, useBranches } from '@/hooks/useRepos';
 import { usePRs } from '@/hooks/usePRs';
 import { CreatePRDialog } from './CreatePRDialog';
 import type { TreeEntry } from '@/types/codigo';
+import { apiFetch } from '@/lib/api';
 
 interface FileTreeItem extends TreeEntry {
   children?: FileTreeItem[];
@@ -98,39 +99,23 @@ export function CodeBrowser() {
       pathsToLoadNow.forEach(pathToLoad => {
         const loadTree = async () => {
           try {
-            const { supabase } = await import('@/integrations/supabase/client');
-            const { data: { session } } = await supabase.auth.getSession();
-            if (session) {
-              const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
-              const params = new URLSearchParams();
-              params.append('ref', ref);
-              params.append('path', pathToLoad);
+            const params = new URLSearchParams();
+            params.append('ref', ref);
+            params.append('path', pathToLoad);
 
-              const url = `${FUNCTIONS_URL}/github-code/repos/${repoId}/tree?${params.toString()}`;
+            const data = await apiFetch<{ tree: TreeEntry[] }>(
+              `/functions/v1/github-code/repos/${repoId}/tree?${params.toString()}`
+            );
 
-              const response = await fetch(url, {
-                headers: {
-                  'Authorization': `Bearer ${session.access_token}`,
-                  'Content-Type': 'application/json',
-                },
-              });
-
-              if (response.ok) {
-                const data = await response.json();
-                setLoadedTrees(prev => {
-                  // Verificar novamente se ainda não foi carregado (evitar race conditions)
-                  if (prev.has(pathToLoad)) {
-                    return prev;
-                  }
-                  const newMap = new Map(prev);
-                  newMap.set(pathToLoad, data.tree || []);
-                  return newMap;
-                });
-              } else {
-                const errorText = await response.text();
-                console.error('Failed to load tree:', response.status, pathToLoad, errorText);
+            setLoadedTrees(prev => {
+              // Verificar novamente se ainda não foi carregado (evitar race conditions)
+              if (prev.has(pathToLoad)) {
+                return prev;
               }
-            }
+              const newMap = new Map(prev);
+              newMap.set(pathToLoad, data.tree || []);
+              return newMap;
+            });
           } catch (error) {
             console.error('Error loading tree:', error, pathToLoad);
           }

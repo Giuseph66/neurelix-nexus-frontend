@@ -50,11 +50,11 @@ export function KanbanCard({ tarefa, onClick, isDragging }: KanbanCardProps) {
       {/* Header */}
       <div className="flex items-start justify-between gap-2 mb-2">
         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span>{typeConfig.icon}</span>
+          <typeConfig.icon className="h-3.5 w-3.5" style={{ color: typeConfig.color }} />
           <span className="font-mono">{tarefa.key}</span>
         </div>
         <div className="flex items-center gap-1" title={`Prioridade: ${priorityConfig.label}`}>
-          <span className="text-xs">{priorityConfig.icon}</span>
+          <priorityConfig.icon className="h-4 w-4" style={{ color: priorityConfig.color }} />
         </div>
       </div>
 

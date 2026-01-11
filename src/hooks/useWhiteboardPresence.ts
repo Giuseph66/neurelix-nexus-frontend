@@ -1,5 +1,5 @@
-import { useEffect, useState, useCallback, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { useCallback, useRef } from "react";
+import { useAuth } from "@/contexts/AuthContext";
 
 export interface Collaborator {
   id: string;
@@ -35,117 +35,19 @@ export function useWhiteboardPresence({
   whiteboardId, 
   enabled 
 }: UseWhiteboardPresenceOptions) {
-  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
-  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
-  const [userName, setUserName] = useState<string>('Anônimo');
+  const collaborators: Collaborator[] = [];
   const userColorRef = useRef(generateUserColor());
-  const presenceChannelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  void whiteboardId;
+  void enabled;
 
-  // Get current user
-  useEffect(() => {
-    const getUser = async () => {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (user) {
-        setCurrentUserId(user.id);
-        
-        // Get user profile
-        const { data: profile } = await supabase
-          .from('profiles')
-          .select('full_name')
-          .eq('user_id', user.id)
-          .maybeSingle();
-        
-        if (profile?.full_name) {
-          setUserName(profile.full_name);
-        } else if (user.email) {
-          setUserName(user.email.split('@')[0]);
-        }
-      }
-    };
-    getUser();
-  }, []);
-
-  // Subscribe to presence
-  useEffect(() => {
-    if (!whiteboardId || !enabled || !currentUserId) return;
-
-    console.log('[Presence] Setting up presence for:', whiteboardId);
-
-    const channel = supabase.channel(`presence-${whiteboardId}`, {
-      config: {
-        presence: {
-          key: currentUserId,
-        },
-      },
-    });
-
-    channel
-      .on('presence', { event: 'sync' }, () => {
-        const state = channel.presenceState();
-        console.log('[Presence] Sync:', state);
-        
-        const users: Collaborator[] = [];
-        
-        Object.keys(state).forEach(key => {
-          const presences = state[key] as any[];
-          presences.forEach(presence => {
-            if (presence.user_id !== currentUserId) {
-              users.push({
-                id: key,
-                userId: presence.user_id,
-                name: presence.name || 'Anônimo',
-                color: presence.color || '#3B82F6',
-                cursorX: presence.cursor_x,
-                cursorY: presence.cursor_y,
-                lastSeen: new Date().toISOString(),
-              });
-            }
-          });
-        });
-        
-        setCollaborators(users);
-      })
-      .on('presence', { event: 'join' }, ({ key, newPresences }) => {
-        console.log('[Presence] Join:', key, newPresences);
-      })
-      .on('presence', { event: 'leave' }, ({ key, leftPresences }) => {
-        console.log('[Presence] Leave:', key, leftPresences);
-      })
-      .subscribe(async (status) => {
-        if (status === 'SUBSCRIBED') {
-          await channel.track({
-            user_id: currentUserId,
-            name: userName,
-            color: userColorRef.current,
-            cursor_x: null,
-            cursor_y: null,
-            online_at: new Date().toISOString(),
-          });
-        }
-      });
-
-    presenceChannelRef.current = channel;
-
-    return () => {
-      console.log('[Presence] Cleaning up presence');
-      supabase.removeChannel(channel);
-      presenceChannelRef.current = null;
-    };
-  }, [whiteboardId, enabled, currentUserId, userName]);
+  const { user } = useAuth();
+  const currentUserId = user?.id ?? null;
 
   // Update cursor position
   const updateCursor = useCallback((x: number | null, y: number | null) => {
-    if (!presenceChannelRef.current || !currentUserId) return;
-
-    presenceChannelRef.current.track({
-      user_id: currentUserId,
-      name: userName,
-      color: userColorRef.current,
-      cursor_x: x,
-      cursor_y: y,
-      online_at: new Date().toISOString(),
-    });
-  }, [currentUserId, userName]);
+    void x;
+    void y;
+  }, []);
 
   return {
     collaborators,

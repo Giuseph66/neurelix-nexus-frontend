@@ -1,7 +1,6 @@
 import { useEffect, useCallback, useRef } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/api";
 import { Canvas as FabricCanvas } from "fabric";
-import { toast } from "sonner";
 
 interface UseRealtimeWhiteboardOptions {
   whiteboardId: string | null;
@@ -16,8 +15,7 @@ export function useRealtimeWhiteboard({
   enabled,
   onRemoteChange,
 }: UseRealtimeWhiteboardOptions) {
-  const syncTimeoutRef = useRef<NodeJS.Timeout | null>(null);
-  const channelRef = useRef<ReturnType<typeof supabase.channel> | null>(null);
+  const pollRef = useRef<NodeJS.Timeout | null>(null);
   const lastAppliedSnapshotKeyRef = useRef<string>('');
   const lastAppliedVersionRef = useRef<number>(-1);
 
@@ -63,26 +61,20 @@ export function useRealtimeWhiteboard({
     }
   }, [getCanvas, onRemoteChange]);
 
-  // Load snapshot from database
-  const loadSnapshotFromDB = useCallback(async () => {
+  // Load snapshot from backend
+  const loadSnapshotFromDB = useCallback(async (source: 'db_load' | 'realtime' = 'db_load') => {
     const currentCanvas = getCanvas();
     if (!whiteboardId || !currentCanvas) return;
 
     const startTime = Date.now();
 
     try {
-      const { data, error } = await supabase
-        .from('whiteboards')
-        .select('id, canvas_snapshot, snapshot_version')
-        .eq('id', whiteboardId)
-        .maybeSingle();
-
-      if (error) throw error;
+      const data = await apiFetch<any>(`/whiteboards/${whiteboardId}`);
 
       console.log('[Realtime] Loading snapshot from DB', {
         whiteboardId,
-        hasSnapshot: !!(data as any)?.canvas_snapshot,
-        version: (data as any)?.snapshot_version,
+        hasSnapshot: !!data?.canvas_snapshot,
+        version: data?.snapshot_version,
       });
 
       const duration = Date.now() - startTime;
@@ -92,80 +84,34 @@ export function useRealtimeWhiteboard({
       });
 
       applySnapshotToCanvas(
-        (data as any)?.canvas_snapshot ?? null,
-        typeof (data as any)?.snapshot_version === 'number' ? (data as any).snapshot_version : -1,
-        'db_load'
+        data?.canvas_snapshot ?? null,
+        typeof data?.snapshot_version === 'number' ? data.snapshot_version : -1,
+        source
       );
     } catch (error) {
       console.error('[Realtime] Error loading snapshot:', error);
     }
   }, [whiteboardId, getCanvas, applySnapshotToCanvas]);
 
-  // Subscribe to realtime changes
+  // Poll for changes
   useEffect(() => {
     if (!whiteboardId || !enabled) return;
 
-    console.log('[Realtime] Subscribing to whiteboard:', whiteboardId);
+    console.log('[Realtime] Polling whiteboard:', whiteboardId);
 
-    const channel = supabase
-      .channel(`whiteboard-${whiteboardId}`, {
-        config: {
-          broadcast: { self: false },
-        },
-      })
-      .on(
-        'postgres_changes',
-        {
-          event: 'UPDATE',
-          schema: 'public',
-          table: 'whiteboards',
-          filter: `id=eq.${whiteboardId}`,
-        },
-        (payload) => {
-          console.log('[Realtime] Received snapshot change', {
-            whiteboardId,
-            eventType: payload.eventType,
-          });
-
-          const next = (payload as any).new;
-          if (!next) return;
-
-          // Debounce to batch rapid updates
-          if (syncTimeoutRef.current) clearTimeout(syncTimeoutRef.current);
-          syncTimeoutRef.current = setTimeout(() => {
-            applySnapshotToCanvas(
-              next.canvas_snapshot ?? null,
-              typeof next.snapshot_version === 'number' ? next.snapshot_version : -1,
-              'realtime'
-            );
-          }, 80);
-        }
-      )
-      .subscribe((status) => {
-        console.log('[Realtime] Subscription status:', status);
-        if (status === 'SUBSCRIBED') {
-          toast.success('Colaboração em tempo real ativada');
-          // Sync initial state on subscribe
-          loadSnapshotFromDB();
-        }
-      });
-
-    // Helpful: log realtime channel errors
-    channel.on('system', { event: '*' }, (payload) => {
-      console.log('[Realtime] System event', payload);
-    });
-
-    channelRef.current = channel;
+    loadSnapshotFromDB('db_load');
+    pollRef.current = setInterval(() => {
+      loadSnapshotFromDB('realtime');
+    }, 3000);
 
     return () => {
-      console.log('[Realtime] Unsubscribing from whiteboard');
-      supabase.removeChannel(channel);
-      if (syncTimeoutRef.current) {
-        clearTimeout(syncTimeoutRef.current);
+      console.log('[Realtime] Stopping whiteboard polling');
+      if (pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
       }
-      channelRef.current = null;
     };
-  }, [whiteboardId, enabled, loadSnapshotFromDB, applySnapshotToCanvas]);
+  }, [whiteboardId, enabled, loadSnapshotFromDB]);
 
   return {
     loadSnapshotFromDB,

@@ -15,10 +15,8 @@ import {
 import { formatDistanceToNow } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { apiFetch } from '@/lib/api';
 import { Loader2 } from 'lucide-react';
-
-const FUNCTIONS_URL = import.meta.env.VITE_SUPABASE_URL?.replace(/\/$/, '') + '/functions/v1';
 
 export function ReviewInbox() {
   const { projectId, repoId } = useParams<{ projectId: string; repoId?: string }>();
@@ -27,25 +25,11 @@ export function ReviewInbox() {
   const { data, isLoading, error } = useQuery({
     queryKey: ['review-inbox', projectId, repoId],
     queryFn: async () => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
       const params = new URLSearchParams();
       params.append('projectId', projectId || '');
       if (repoId) params.append('repoId', repoId);
 
-      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/reviews/inbox?${params.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.message || 'Erro ao buscar reviews pendentes');
-      }
-
-      return await response.json();
+      return await apiFetch(`/functions/v1/github-pulls/reviews/inbox?${params.toString()}`);
     },
     enabled: !!projectId,
   });
