@@ -1,7 +1,8 @@
 import { useState, useCallback } from 'react';
 import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, closestCorners, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
-import { SortableContext, verticalListSortingStrategy } from '@dnd-kit/sortable';
-import { useBoardView, useMoveTarefa } from '@/hooks/useTarefas';
+import { SortableContext, verticalListSortingStrategy, horizontalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
+import { useQueryClient } from '@tanstack/react-query';
+import { useBoardView, useMoveTarefa, useReorderWorkflowStatuses } from '@/hooks/useTarefas';
 import { KanbanColumn } from './KanbanColumn';
 import { KanbanCard } from './KanbanCard';
 import { TarefaDetailModal } from './TarefaDetailModal';
@@ -21,6 +22,8 @@ interface KanbanBoardProps {
 export function KanbanBoard({ boardId, projectId }: KanbanBoardProps) {
   const { data: boardView, isLoading } = useBoardView(boardId);
   const moveTarefa = useMoveTarefa();
+  const reorderColumns = useReorderWorkflowStatuses();
+  const queryClient = useQueryClient();
   
   const [activeTarefa, setActiveTarefa] = useState<Tarefa | null>(null);
   const [selectedTarefaId, setSelectedTarefaId] = useState<string | null>(null);
@@ -39,6 +42,10 @@ export function KanbanBoard({ boardId, projectId }: KanbanBoardProps) {
 
   const handleDragStart = useCallback((event: DragStartEvent) => {
     const { active } = event;
+    if (typeof active.id === 'string' && active.id.startsWith('col:')) {
+      setActiveTarefa(null);
+      return;
+    }
     const tarefa = boardView?.columns
       .flatMap(c => c.tarefas)
       .find(t => t.id === active.id);
@@ -51,8 +58,53 @@ export function KanbanBoard({ boardId, projectId }: KanbanBoardProps) {
 
     if (!over || !boardView) return;
 
-    const tarefaId = active.id as string;
-    const targetStatusId = over.id as string;
+    const activeId = String(active.id);
+    const overId = String(over.id);
+
+    // Column reordering
+    if (activeId.startsWith('col:')) {
+      // Check if dropping on another column or on the column's droppable area
+      let targetStatusId: string | null = null;
+      
+      if (overId.startsWith('col:')) {
+        targetStatusId = overId.replace('col:', '');
+      } else {
+        // Dropping on a column's droppable area (status.id)
+        const targetColumn = boardView.columns.find(c => c.status.id === overId);
+        if (targetColumn) {
+          targetStatusId = targetColumn.status.id;
+        }
+      }
+
+      if (!targetStatusId) return;
+
+      const activeStatusId = activeId.replace('col:', '');
+      if (activeStatusId === targetStatusId) return;
+
+      const currentOrder = boardView.columns.map(c => c.status.id);
+      const oldIndex = currentOrder.indexOf(activeStatusId);
+      const newIndex = currentOrder.indexOf(targetStatusId);
+      if (oldIndex === -1 || newIndex === -1) return;
+
+      const newOrder = arrayMove(currentOrder, oldIndex, newIndex);
+
+      // optimistic update
+      queryClient.setQueryData(['board-view', boardId], (old: any) => {
+        if (!old) return old;
+        const byId = new Map(old.columns.map((c: any) => [c.status.id, c]));
+        return {
+          ...old,
+          columns: newOrder.map((id: string) => byId.get(id)).filter(Boolean),
+        };
+      });
+
+      reorderColumns.mutate({ workflowId: boardView.workflow.id, orderedStatusIds: newOrder });
+      return;
+    }
+
+    // tarefa move between columns (existing behavior)
+    const tarefaId = activeId;
+    const targetStatusId = overId;
 
     // Check if dropping on a column
     const targetColumn = boardView.columns.find(c => c.status.id === targetStatusId);
@@ -67,7 +119,7 @@ export function KanbanBoard({ boardId, projectId }: KanbanBoardProps) {
 
     // Move tarefa freely to any column (optimistic update)
     moveTarefa.mutate({ tarefaId, toStatusId: targetStatusId, boardId });
-  }, [boardView, moveTarefa]);
+  }, [boardView, boardId, moveTarefa, queryClient, reorderColumns]);
 
   const handleTarefaClick = useCallback((tarefaId: string) => {
     setSelectedTarefaId(tarefaId);
@@ -149,28 +201,34 @@ export function KanbanBoard({ boardId, projectId }: KanbanBoardProps) {
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
-          <div className="flex gap-4 h-full">
-            {filteredColumns?.map(column => (
-              <KanbanColumn
-                key={column.status.id}
-                status={column.status}
-                tarefasCount={column.tarefas.length}
-              >
-                <SortableContext
-                  items={column.tarefas.map(t => t.id)}
-                  strategy={verticalListSortingStrategy}
+          <SortableContext
+            items={boardView.columns.map(c => `col:${c.status.id}`)}
+            strategy={horizontalListSortingStrategy}
+          >
+            <div className="flex gap-4 h-full">
+              {filteredColumns?.map(column => (
+                <KanbanColumn
+                  key={column.status.id}
+                  status={column.status}
+                  workflowId={boardView.workflow.id}
+                  tarefasCount={column.tarefas.length}
                 >
-                  {column.tarefas.map(tarefa => (
-                    <KanbanCard
-                      key={tarefa.id}
-                      tarefa={tarefa}
-                      onClick={() => handleTarefaClick(tarefa.id)}
-                    />
-                  ))}
-                </SortableContext>
-              </KanbanColumn>
-            ))}
-          </div>
+                  <SortableContext
+                    items={column.tarefas.map(t => t.id)}
+                    strategy={verticalListSortingStrategy}
+                  >
+                    {column.tarefas.map(tarefa => (
+                      <KanbanCard
+                        key={tarefa.id}
+                        tarefa={tarefa}
+                        onClick={() => handleTarefaClick(tarefa.id)}
+                      />
+                    ))}
+                  </SortableContext>
+                </KanbanColumn>
+              ))}
+            </div>
+          </SortableContext>
 
           <DragOverlay>
             {activeTarefa ? (

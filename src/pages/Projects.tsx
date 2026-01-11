@@ -1,6 +1,5 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/contexts/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { Loader2 as LoaderIcon } from "lucide-react";
@@ -21,6 +20,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { useToast } from "@/hooks/use-toast";
 import { Plus, FolderOpen, Loader2, Calendar, Users } from "lucide-react";
 import { usePageTitle } from "@/hooks/usePageTitle";
+import { apiFetch } from "@/lib/api";
 
 interface Project {
   id: string;
@@ -45,49 +45,17 @@ export default function Projects() {
   const { data: projects, isLoading } = useQuery({
     queryKey: ["projects"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("projects")
-        .select("*")
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-      return data as Project[];
+      return await apiFetch<Project[]>("/projects");
     },
     enabled: !!user,
   });
 
   const createProjectMutation = useMutation({
     mutationFn: async ({ name, description }: { name: string; description: string }) => {
-      const slug = name
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/(^-|-$)/g, "")
-        + "-" + Date.now().toString(36);
-
-      const { data: project, error: projectError } = await supabase
-        .from("projects")
-        .insert({
-          name,
-          description: description || null,
-          slug,
-          created_by: user?.id,
-        })
-        .select()
-        .single();
-
-      if (projectError) throw projectError;
-
-      const { error: memberError } = await supabase
-        .from("project_members")
-        .insert({
-          project_id: project.id,
-          user_id: user?.id,
-          role: "admin",
-        });
-
-      if (memberError) throw memberError;
-
-      return project;
+      return await apiFetch<Project>("/projects", {
+        method: "POST",
+        body: { name, description },
+      });
     },
     onSuccess: (project) => {
       queryClient.invalidateQueries({ queryKey: ["projects"] });

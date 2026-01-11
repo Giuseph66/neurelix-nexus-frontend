@@ -1,11 +1,13 @@
 import { useState } from 'react';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { useDroppable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
 import { useStartSprint, useCompleteSprint } from '@/hooks/useBacklog';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { ChevronDown, ChevronRight, Play, CheckCircle, GripVertical, Bug, Zap, CheckSquare, BookOpen, Circle } from 'lucide-react';
+import { EditSprintDialog } from './EditSprintDialog';
+import { ChevronDown, ChevronRight, Play, CheckCircle, GripVertical, Bug, Zap, CheckSquare, BookOpen, Circle, Pencil } from 'lucide-react';
 import type { Tarefa, Sprint } from '@/types/tarefas';
 import { PRIORITY_CONFIG, TYPE_CONFIG } from '@/types/tarefas';
 
@@ -19,6 +21,21 @@ interface SprintSectionProps {
 interface SprintItemProps {
   tarefa: Tarefa;
   onClick: () => void;
+}
+
+function SprintDroppable({ sprintId, children }: { sprintId: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `sprint:${sprintId}`,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${isOver ? 'ring-2 ring-primary ring-offset-2 rounded-lg' : ''}`}
+    >
+      {children}
+    </div>
+  );
 }
 
 function SprintItem({ tarefa, onClick }: SprintItemProps) {
@@ -80,6 +97,7 @@ function SprintItem({ tarefa, onClick }: SprintItemProps) {
 
 export function SprintSection({ sprint, tarefas, projectId, onTarefaClick }: SprintSectionProps) {
   const [isOpen, setIsOpen] = useState(true);
+  const [showEditDialog, setShowEditDialog] = useState(false);
   const startSprint = useStartSprint();
   const completeSprint = useCompleteSprint();
 
@@ -94,6 +112,11 @@ export function SprintSection({ sprint, tarefas, projectId, onTarefaClick }: Spr
   const handleCompleteSprint = (e: React.MouseEvent) => {
     e.stopPropagation();
     completeSprint.mutate({ sprintId: sprint.id, projectId });
+  };
+
+  const handleEditSprint = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowEditDialog(true);
   };
 
   return (
@@ -123,6 +146,13 @@ export function SprintSection({ sprint, tarefas, projectId, onTarefaClick }: Spr
             </div>
 
             <div className="flex items-center gap-2">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={handleEditSprint}
+              >
+                <Pencil className="h-3 w-3" />
+              </Button>
               {isPlanned && (
                 <Button
                   size="sm"
@@ -150,28 +180,37 @@ export function SprintSection({ sprint, tarefas, projectId, onTarefaClick }: Spr
         </CollapsibleTrigger>
 
         <CollapsibleContent>
-          <div className="p-3 pt-0 space-y-2">
-            <SortableContext
-              items={tarefas.map(t => t.id)}
-              strategy={verticalListSortingStrategy}
-            >
-              {tarefas.map(tarefa => (
-                <SprintItem
-                  key={tarefa.id}
-                  tarefa={tarefa}
-                  onClick={() => onTarefaClick(tarefa.id)}
-                />
-              ))}
-            </SortableContext>
+          <SprintDroppable sprintId={sprint.id}>
+            <div className="p-3 pt-0 space-y-2">
+              <SortableContext
+                items={tarefas.map(t => t.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                {tarefas.map(tarefa => (
+                  <SprintItem
+                    key={tarefa.id}
+                    tarefa={tarefa}
+                    onClick={() => onTarefaClick(tarefa.id)}
+                  />
+                ))}
+              </SortableContext>
 
-            {tarefas.length === 0 && (
-              <div className="text-center py-4 text-muted-foreground text-sm">
-                Arraste tarefas do backlog para esta sprint
-              </div>
-            )}
-          </div>
+              {tarefas.length === 0 && (
+                <div className="text-center py-4 text-muted-foreground text-sm border-2 border-dashed border-border rounded-lg">
+                  Arraste tarefas do backlog para esta sprint
+                </div>
+              )}
+            </div>
+          </SprintDroppable>
         </CollapsibleContent>
       </div>
+      
+      <EditSprintDialog
+        open={showEditDialog}
+        onOpenChange={setShowEditDialog}
+        sprint={sprint}
+        projectId={projectId}
+      />
     </Collapsible>
   );
 }

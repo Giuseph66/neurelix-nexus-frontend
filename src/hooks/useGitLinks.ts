@@ -1,9 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { apiFetch } from '@/lib/api';
 import { toast } from 'sonner';
 import type { LinkTarefaInput, CreateBranchFromTarefaInput } from '@/types/codigo';
-
-const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 
 /**
  * Hook para obter vínculos Git de uma tarefa
@@ -14,22 +12,7 @@ export function useTarefaGitLinks(tarefaId: string | undefined) {
     queryFn: async () => {
       if (!tarefaId) return null;
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/git-links/tarefas/${tarefaId}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to fetch git links');
-      }
-
-      return await response.json();
+      return await apiFetch(`/functions/v1/git-links/tarefas/${tarefaId}`);
     },
     enabled: !!tarefaId,
   });
@@ -43,24 +26,10 @@ export function useLinkTarefa() {
 
   return useMutation({
     mutationFn: async (input: LinkTarefaInput) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/git-links`, {
+      return await apiFetch(`/functions/v1/git-links`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(input),
+        body: input,
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to link tarefa');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['tarefa-git-links', variables.tarefaId] });
@@ -81,24 +50,10 @@ export function useCreateBranchFromTarefa() {
 
   return useMutation({
     mutationFn: async (input: CreateBranchFromTarefaInput) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/git-links/create-branch`, {
+      return await apiFetch(`/functions/v1/git-links/create-branch`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(input),
+        body: input,
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create branch');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['tarefa-git-links', variables.tarefaId] });

@@ -1,6 +1,6 @@
 import { useParams, useLocation } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/api";
 import { SidebarTrigger } from "@/components/ui/sidebar";
 import { Separator } from "@/components/ui/separator";
 import {
@@ -28,37 +28,22 @@ export function AppHeader({ pageTitle }: AppHeaderProps) {
     queryKey: ["project", projectId],
     queryFn: async () => {
       if (!projectId) return null;
-      const { data, error } = await supabase
-        .from("projects")
-        .select("*")
-        .eq("id", projectId)
-        .maybeSingle();
-
-      if (error) throw error;
-      return data;
+      return await apiFetch(`/projects/${projectId}`);
     },
     enabled: !!projectId,
   });
 
-  const { data: memberRole } = useQuery({
+  const { data: roleData } = useQuery({
     queryKey: ["project-role", projectId],
     queryFn: async () => {
       if (!projectId) return null;
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return null;
-
-      const { data, error } = await supabase
-        .from("project_members")
-        .select("role")
-        .eq("project_id", projectId)
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (error) throw error;
-      return data?.role;
+      const data = await apiFetch<{ role: string }>(`/projects/${projectId}/role`);
+      return data.role;
     },
     enabled: !!projectId,
   });
+  
+  const memberRole = roleData || null;
 
   const getRoleBadgeVariant = (role: string | null | undefined) => {
     switch (role) {

@@ -12,9 +12,12 @@ import {
   Plus, 
   CheckCircle2,
   ExternalLink,
-  Loader2
+  Loader2,
+  LogOut,
+  Github
 } from 'lucide-react';
 import { useSelectedRepos } from '@/hooks/useSelectRepos';
+import { useGitHubConnection, useRevokeGitHubConnection } from '@/hooks/useGitHubOAuth';
 import { SelectReposPage } from './SelectReposPage';
 
 export function CodeSettings() {
@@ -23,6 +26,8 @@ export function CodeSettings() {
   const [showAddRepos, setShowAddRepos] = useState(false);
   
   const { data: selectedReposData, isLoading } = useSelectedRepos(projectId);
+  const { data: connection } = useGitHubConnection(projectId);
+  const revokeConnection = useRevokeGitHubConnection();
   const repos = selectedReposData?.repos || [];
 
   // Obter repositório ativo do localStorage
@@ -65,18 +70,87 @@ export function CodeSettings() {
   return (
     <div className="h-full flex flex-col">
       <div className="border-b p-6">
-        <div className="flex items-center justify-between">
+        <div className="flex items-center justify-between mb-4">
           <div>
             <h1 className="text-2xl font-bold">Configurações</h1>
             <p className="text-sm text-muted-foreground mt-1">
               Selecione o repositório que deseja visualizar
             </p>
           </div>
-          <Button onClick={() => setShowAddRepos(true)}>
-            <Plus className="h-4 w-4 mr-2" />
-            Adicionar Repositórios
-          </Button>
+          <div className="flex items-center gap-2">
+            {connection?.connected && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={async () => {
+                  if (projectId && confirm('Tem certeza que deseja desconectar o GitHub? Todos os repositórios selecionados serão desmarcados.')) {
+                    await revokeConnection.mutateAsync(projectId);
+                  }
+                }}
+                disabled={revokeConnection.isPending}
+              >
+                {revokeConnection.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Desconectando...
+                  </>
+                ) : (
+                  <>
+                    <LogOut className="h-4 w-4 mr-2" />
+                    Desconectar GitHub
+                  </>
+                )}
+              </Button>
+            )}
+            {connection?.connected && (
+              <Button onClick={() => setShowAddRepos(true)}>
+                <Plus className="h-4 w-4 mr-2" />
+                Adicionar Repositórios
+              </Button>
+            )}
+          </div>
         </div>
+        
+        {/* Informações da conexão GitHub */}
+        {connection?.connected && (
+          <Card className="mb-4">
+            <CardContent className="p-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Github className="h-5 w-5 text-muted-foreground" />
+                  <div>
+                    <p className="text-sm font-medium">Conectado ao GitHub</p>
+                    <p className="text-xs text-muted-foreground">
+                      Usuário: <strong>{connection.username}</strong>
+                    </p>
+                  </div>
+                </div>
+                <Badge variant="outline" className="bg-green-50 dark:bg-green-950 border-green-200 dark:border-green-800">
+                  <CheckCircle2 className="h-3 w-3 mr-1 text-green-600 dark:text-green-400" />
+                  Conectado
+                </Badge>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+        
+        {!connection?.connected && (
+          <Card className="mb-4 border-dashed">
+            <CardContent className="p-4 text-center">
+              <Github className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+              <p className="text-sm text-muted-foreground mb-3">
+                Nenhuma conexão GitHub ativa
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => navigate(`/project/${projectId}/code`)}
+              >
+                Conectar GitHub
+              </Button>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       <ScrollArea className="flex-1">

@@ -1,11 +1,11 @@
 import { useState, useEffect } from 'react';
 import { useParams, Routes, Route, Navigate, useNavigate, useSearchParams } from 'react-router-dom';
 import { useQueryClient, useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { Plus, GitBranch, GitPullRequest, Code2, Settings, AlertCircle, X, ChevronRight } from 'lucide-react';
+import { Plus, GitBranch, GitPullRequest, Code2, Settings, AlertCircle, X, ChevronRight, CheckCircle2 } from 'lucide-react';
 import { ConnectGitWizard } from '@/components/codigo/ConnectGitWizard';
 import { RepoCatalog } from '@/components/codigo/RepoCatalog';
 import { CodeBrowser } from '@/components/codigo/CodeBrowser';
@@ -68,21 +68,14 @@ export default function Code() {
   
   const openPRsCount = activeRepo?.open_prs_count || 0;
   
-  // Calcular reviews pendentes do repositório ativo (simplificado por enquanto)
-  const pendingReviewsCount = 0; // TODO: Implementar contador por repositório
+  // Calcular reviews pendentes do projeto
+  const pendingReviewsCount = reviewInboxData?.pendingCount || 0;
   
   const { data: project } = useQuery({
     queryKey: ['project', projectId],
     queryFn: async () => {
       if (!projectId) return null;
-      const { data, error } = await supabase
-        .from('projects')
-        .select('*')
-        .eq('id', projectId)
-        .maybeSingle();
-      
-      if (error) throw error;
-      return data;
+      return await apiFetch<{ name?: string }>(`/projects/${projectId}`, { auth: true });
     },
     enabled: !!projectId,
   });
@@ -144,6 +137,18 @@ export default function Code() {
     }
   }, [projectId, hasSelectedRepos, activeRepoId, location.pathname, navigate]);
 
+  const getActiveTab = () => {
+    if (location.pathname.includes('/pull-requests')) {
+      if (location.search.includes('state=merged')) return 'merges';
+      return 'prs';
+    }
+    if (location.pathname.includes('/reviews')) return 'reviews';
+    if (location.pathname.includes('/settings')) return 'settings';
+    return 'code';
+  };
+
+  const activeTab = getActiveTab();
+
   if (!projectId) {
     return <div>Projeto não encontrado</div>;
   }
@@ -167,7 +172,7 @@ export default function Code() {
         <div className="flex items-center justify-between px-4 pb-3">
           <div className="flex items-center gap-4">
             {activeRepoId ? (
-              <Tabs defaultValue="code" className="w-auto">
+              <Tabs value={activeTab} className="w-auto">
                 <TabsList>
                   <TabsTrigger 
                     value="code" 
@@ -178,7 +183,7 @@ export default function Code() {
                   </TabsTrigger>
                   <TabsTrigger 
                     value="prs" 
-                    onClick={() => navigate(`/project/${projectId}/code/repos/${activeRepoId}/pull-requests`)}
+                    onClick={() => navigate(`/project/${projectId}/code/repos/${activeRepoId}/pull-requests?state=open`)}
                   >
                     <GitPullRequest className="h-4 w-4 mr-2" />
                     Pull Requests
@@ -189,17 +194,27 @@ export default function Code() {
                     )}
                   </TabsTrigger>
                   <TabsTrigger 
-                    value="reviews" 
-                    onClick={() => navigate(`/project/${projectId}/code/repos/${activeRepoId}/reviews`)}
+                    value="merges" 
+                    onClick={() => navigate(`/project/${projectId}/code/repos/${activeRepoId}/pull-requests?state=merged`)}
                   >
-                    <GitBranch className="h-4 w-4 mr-2" />
-                    Reviews
-                    {pendingReviewsCount > 0 && (
-                      <Badge variant="secondary" className="ml-2">
+                    <CheckCircle2 className="h-4 w-4 mr-2" />
+                    Mesclados
+                  </TabsTrigger>{
+                    /*
+                  <TabsTrigger 
+                  value="reviews" 
+                  onClick={() => navigate(`/project/${projectId}/code/repos/${activeRepoId}/reviews`)}
+                  >
+                  <GitBranch className="h-4 w-4 mr-2" />
+                  Reviews
+                  {pendingReviewsCount > 0 && (
+                    <Badge variant="secondary" className="ml-2">
                         {pendingReviewsCount}
                       </Badge>
                     )}
                   </TabsTrigger>
+                      */
+                    }
                 </TabsList>
               </Tabs>
             ) : (

@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
 import {
@@ -107,6 +108,9 @@ export function BoardList({ projectId, onSelectBoard }: BoardListProps) {
           <form onSubmit={handleCreateBoard}>
             <DialogHeader>
               <DialogTitle>Criar Novo Board</DialogTitle>
+              <DialogDescription>
+                Crie um novo board para organizar suas tarefas em diferentes workflows.
+              </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4 py-4">

@@ -94,9 +94,47 @@ export interface PullRequest {
   // Joined fields
   repo?: Repo;
   author?: { id: string; full_name: string; avatar_url?: string };
+  // PR detail fields (when fetching /pulls/:repoId/:prNumber)
+  commits?: Array<{
+    sha: string;
+    message: string;
+    author?: string;
+    date?: string;
+    url?: string;
+  }>;
+  files?: Array<{
+    filename: string;
+    status: 'added' | 'removed' | 'modified' | 'renamed' | string;
+    additions: number;
+    deletions: number;
+    changes: number;
+    patch?: string;
+    raw_url?: string;
+  }>;
   reviews?: PRReview[];
   comments_count?: number;
   status_checks?: StatusCheck[];
+  comments?: {
+    general: Array<{
+      id: string;
+      author_username?: string;
+      body: string;
+      created_at: string;
+      html_url?: string;
+    }>;
+    inline: Array<{
+      id: string;
+      author_username?: string;
+      body: string;
+      path?: string;
+      line_number?: number;
+      line?: number;
+      side?: CommentSide;
+      in_reply_to_id?: string;
+      created_at: string;
+      html_url?: string;
+    }>;
+  };
   review_status?: {
     total_reviews: number;
     approved: number;
@@ -104,6 +142,7 @@ export interface PullRequest {
     commented: number;
   };
   linked_tarefas?: Array<{ id: string; key: string; title: string }>;
+  owner_user_id?: string | null;
 }
 
 export interface PRReview {
@@ -134,6 +173,21 @@ export interface PRComment {
   // Joined fields
   author?: { id: string; full_name: string; avatar_url?: string };
   replies?: PRComment[];
+
+  // Enriquecimento local (Neurelix) para code review
+  thread_id?: string;
+  thread_resolution?: {
+    resolution: 'RESOLVED' | 'WONT_FIX';
+    reason: string;
+    resolved_by_user_id: string;
+    resolved_by_name?: string | null;
+    created_at: string;
+  } | null;
+  local_reactions?: {
+    counts: { like: number; dislike: number; contra: number };
+    my: 'like' | 'dislike' | 'contra' | null;
+    contra_reasons: Array<{ user_id: string; user_name?: string | null; reason: string; created_at: string }>;
+  };
 }
 
 export interface StatusCheck {

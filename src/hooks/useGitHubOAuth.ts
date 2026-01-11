@@ -1,9 +1,13 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
+import { apiFetch } from '@/lib/api';
 
-const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
+export type GitHubConnectionStatus = {
+  connected: boolean;
+  username: string | null;
+  installationId: string | null;
+};
 
 /**
  * Hook para iniciar OAuth GitHub
@@ -16,27 +20,13 @@ export function useStartGitHubOAuth() {
     mutationFn: async (projectId: string) => {
       if (!user) throw new Error('Not authenticated');
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-oauth/start`, {
+      return await apiFetch('/functions/v1/github-oauth/start', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ projectId }),
+        body: { projectId },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to start OAuth');
-      }
-
-      return await response.json();
     },
-    onSuccess: (data) => {
-      if (data.authorizeUrl) {
+    onSuccess: (data: any) => {
+      if (data?.authorizeUrl) {
         // Redirect to GitHub
         window.location.href = data.authorizeUrl;
       }
@@ -56,22 +46,7 @@ export function useGitHubConnection(projectId: string | undefined) {
     queryFn: async () => {
       if (!projectId) return null;
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-oauth/connection?projectId=${projectId}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to fetch connection');
-      }
-
-      return await response.json();
+      return await apiFetch<GitHubConnectionStatus>(`/functions/v1/github-oauth/connection?projectId=${projectId}`);
     },
     enabled: !!projectId,
   });
@@ -85,29 +60,17 @@ export function useRevokeGitHubConnection() {
 
   return useMutation({
     mutationFn: async (projectId: string) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-oauth/connection/revoke`, {
+      return await apiFetch('/functions/v1/github-oauth/connection/revoke', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ projectId }),
+        body: { projectId },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to revoke connection');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, projectId) => {
       queryClient.invalidateQueries({ queryKey: ['github-connection', projectId] });
       queryClient.invalidateQueries({ queryKey: ['repos', projectId] });
-      toast.success('Conexão GitHub revogada');
+      queryClient.invalidateQueries({ queryKey: ['selected-repos', projectId] });
+      queryClient.invalidateQueries({ queryKey: ['available-repos', projectId] });
+      toast.success('Conexão GitHub desconectada com sucesso');
     },
     onError: (error: Error) => {
       toast.error(error.message || 'Erro ao revogar conexão');

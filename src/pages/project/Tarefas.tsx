@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { apiFetch } from '@/lib/api';
 import { BoardList } from '@/components/tarefas/BoardList';
 import { KanbanBoard } from '@/components/tarefas/KanbanBoard';
 import { BacklogView } from '@/components/tarefas/BacklogView';
@@ -21,14 +21,7 @@ export default function Tarefas() {
     queryKey: ['project', projectId],
     queryFn: async () => {
       if (!projectId) return null;
-      const { data, error } = await supabase
-        .from('projects')
-        .select('*')
-        .eq('id', projectId)
-        .single();
-      
-      if (error) throw error;
-      return data;
+      return await apiFetch(`/projects/${projectId}`);
     },
     enabled: !!projectId,
   });

@@ -1,8 +1,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
-import { Plus, MoreVertical, Trash2, Loader2, MessageCircle, GitBranch, ChevronLeft, ChevronRight, Pencil, Check, X } from "lucide-react";
+import { apiFetch } from "@/lib/api";
+import { Plus, MoreVertical, Trash2, Loader2, GitBranch, ChevronLeft, ChevronRight, Pencil, Check, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
@@ -12,17 +12,13 @@ import { useSidebar } from "@/components/ui/sidebar";
 import { TldrawWhiteboard } from "@/components/whiteboard/TldrawWhiteboard";
 //import { WhiteboardToolbar } from "@/components/whiteboard/WhiteboardToolbar";
 import { WhiteboardHeader } from "@/components/whiteboard/WhiteboardHeader";
-import { CommentMarker } from "@/components/whiteboard/CommentMarker";
-import { CommentThread } from "@/components/whiteboard/CommentThread";
-import { BearAssistant } from "@/components/whiteboard/BearAssistant";
+import { BearAssistant, type BearAssistantAnalysisRequest } from "@/components/whiteboard/BearAssistant";
 import { BearCursor } from "@/components/whiteboard/BearCursor";
 import { ToolType } from "@/components/whiteboard/types";
 import { Editor, createShapeId } from "tldraw";
 import { useWhiteboard } from "@/hooks/useWhiteboard";
 import { useWhiteboardPresence } from "@/hooks/useWhiteboardPresence";
 import { useWhiteboardBranches } from "@/hooks/useWhiteboardBranches";
-import { useWhiteboardComments } from "@/hooks/useWhiteboardComments";
-import { useMentions } from "@/hooks/useMentions";
 import { toast } from "sonner";
 import { usePageTitle } from "@/hooks/usePageTitle";
 
@@ -37,9 +33,8 @@ export default function Whiteboard() {
   const [fillColor, setFillColor] = useState("transparent");
   const [strokeWidth, setStrokeWidth] = useState(2);
   const [branches, setBranches] = useState<any[]>([]);
-  const [activeCommentPosition, setActiveCommentPosition] = useState<{ x: number, y: number } | null>(null);
-  const [commentMode, setCommentMode] = useState(false);
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
+  const [assistantAnalysisRequest, setAssistantAnalysisRequest] = useState<BearAssistantAnalysisRequest | null>(null);
   const [cursorPosition, setCursorPosition] = useState({ x: 0, y: 0 });
   const [hasRemoteActivity, setHasRemoteActivity] = useState(false);
   const [tldrawEditor, setTldrawEditor] = useState<Editor | null>(null);
@@ -57,7 +52,6 @@ export default function Whiteboard() {
     deleteWhiteboard,
     renameWhiteboard,
     saveViewport,
-    saveSnapshot,
     fetchWhiteboards,
   } = useWhiteboard({
     projectId: projectId || '',
@@ -70,14 +64,7 @@ export default function Whiteboard() {
     queryKey: ['project', projectId],
     queryFn: async () => {
       if (!projectId) return null;
-      const { data, error } = await supabase
-        .from('projects')
-        .select('*')
-        .eq('id', projectId)
-        .maybeSingle();
-
-      if (error) throw error;
-      return data;
+      return await apiFetch(`/projects/${projectId}`);
     },
     enabled: !!projectId,
   });
@@ -123,21 +110,6 @@ export default function Whiteboard() {
       setSelectedWhiteboardId(newId);
     },
   });
-
-  // Comments
-  const {
-    comments,
-    createComment,
-    deleteComment,
-    toggleResolved,
-    getCommentsForObject,
-  } = useWhiteboardComments({
-    whiteboardId: selectedWhiteboardId,
-    enabled: !!selectedWhiteboardId && !loading,
-  });
-
-  // Notifications/Mentions
-  const { mentions, unreadCount, markAsRead, markAllAsRead } = useMentions();
 
   // Load branches when whiteboard changes
   useEffect(() => {
@@ -187,6 +159,15 @@ export default function Whiteboard() {
     }, 3000);
   }, []);
 
+  const handleAnalyzeSelection = useCallback((payload: Omit<BearAssistantAnalysisRequest, 'id'>) => {
+    const requestId =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2);
+    setAssistantAnalysisRequest({ id: requestId, ...payload });
+    setIsAssistantOpen(true);
+  }, []);
+
   // Handle cursor movement for presence (tldraw)
   useEffect(() => {
     if (!tldrawEditor) return;
@@ -221,6 +202,11 @@ export default function Whiteboard() {
     const isGraph = data.type === 'graph' && Array.isArray(data.nodes);
     const nodes = isGraph ? data.nodes : (data.items || data); // Fallback
     const edges = isGraph ? data.edges : [];
+
+    if (!Array.isArray(nodes) || nodes.length === 0) {
+      toast.error('Nenhum elemento válido retornado pelo assistente.');
+      return;
+    }
 
     // Calculate sizes first
     const processedNodes = nodes.map((node: any) => {
@@ -264,95 +250,118 @@ export default function Whiteboard() {
       });
     }
 
-    // Assign positions
+    // Assign positions (vertical flow)
     const levelGroups: any[][] = Array(maxLevel + 1).fill(null).map(() => []);
     processedNodes.forEach((n: any) => {
       const level = levels.get(n.id) ?? 0;
       levelGroups[level].push(n);
     });
 
-    let startX = 100;
-    let startY = 100;
-    const X_GAP = 250;
-    const Y_GAP = 50;
+    const startX = 100;
+    const startY = 100;
+    const X_GAP = 120;
+    const Y_GAP = 160;
 
-    levelGroups.forEach((group, colIndex) => {
-      let currentY = startY;
+    const rowWidths = levelGroups.map((group) => {
+      if (group.length === 0) return 0;
+      const totalWidth = group.reduce((sum, node) => sum + node.width, 0);
+      return totalWidth + (group.length - 1) * X_GAP;
+    });
+    const maxRowWidth = Math.max(...rowWidths, 0);
+    const rowHeights = levelGroups.map((group) =>
+      group.reduce((max, node) => Math.max(max, node.height), 0)
+    );
+
+    let currentY = startY;
+    levelGroups.forEach((group, rowIndex) => {
+      if (group.length === 0) return;
+      let currentX = startX + (maxRowWidth - rowWidths[rowIndex]) / 2;
       group.forEach((node) => {
-        node.x = startX + (colIndex * X_GAP);
+        node.x = currentX;
         node.y = currentY;
-        currentY += node.height + Y_GAP;
+        currentX += node.width + X_GAP;
       });
+      currentY += rowHeights[rowIndex] + Y_GAP;
     });
 
+    const graphBounds = processedNodes.reduce(
+      (acc, node) => {
+        const minX = Math.min(acc.minX, node.x);
+        const minY = Math.min(acc.minY, node.y);
+        const maxX = Math.max(acc.maxX, node.x + node.width);
+        const maxY = Math.max(acc.maxY, node.y + node.height);
+        return { minX, minY, maxX, maxY };
+      },
+      { minX: Infinity, minY: Infinity, maxX: -Infinity, maxY: -Infinity }
+    );
+
+    const existingBounds = tldrawEditor.getCurrentPageBounds();
+    if (existingBounds && (existingBounds.w > 0 || existingBounds.h > 0)) {
+      const margin = 140;
+      const offsetX = existingBounds.minX - graphBounds.minX;
+      const offsetY = (existingBounds.maxY + margin) - graphBounds.minY;
+      processedNodes.forEach((node) => {
+        node.x += offsetX;
+        node.y += offsetY;
+      });
+    }
+
     // Create tldraw shapes
+    const mapNodeColor = (value: string | undefined) => {
+      switch ((value || '').toLowerCase()) {
+        case 'yellow':
+          return 'yellow';
+        case 'blue':
+          return 'light-blue';
+        case 'green':
+          return 'light-green';
+        case 'pink':
+          return 'light-red';
+        case 'white':
+          return 'white';
+        default:
+          return 'grey';
+      }
+    };
+
     tldrawEditor.batch(() => {
       processedNodes.forEach((el: any) => {
         const shapeId = createShapeId();
-        const fillColor = el.type === 'postit' 
-          ? (el.color === 'yellow' ? '#fef08a' : el.color === 'blue' ? '#93c5fd' : el.color === 'green' ? '#86efac' : el.color === 'pink' ? '#f9a8d4' : '#fef08a')
-          : '#334155';
-        const strokeColor = el.type === 'postit' ? '#eab308' : '#94a3b8';
+        const geoType =
+          el.type === 'diamond'
+            ? 'diamond'
+            : el.type === 'circle'
+              ? 'ellipse'
+              : 'rectangle';
+        const color = el.type === 'postit' ? mapNodeColor(el.color) : 'grey';
 
-        if (el.type === 'diamond') {
-          // Diamond shape (rotated rectangle)
-          const size = Math.max(el.width, el.height) + 40;
-          tldrawEditor.createShape({
-            id: shapeId,
-            type: 'geo',
-            x: el.x,
-            y: el.y,
-            props: {
-              w: size,
-              h: size,
-              geo: 'diamond',
-              fill: 'solid',
-              color: 'grey',
-              dash: 'draw',
-              size: 'm',
-            },
-          });
-        } else {
-          // Rectangle shape
-          tldrawEditor.createShape({
-            id: shapeId,
-            type: 'geo',
-            x: el.x,
-            y: el.y,
-            props: {
-              w: el.width,
-              h: el.height,
-              geo: 'rectangle',
-              fill: 'solid',
-              color: 'grey',
-              dash: 'draw',
-              size: 'm',
-            },
-          });
-        }
+        tldrawEditor.createShape({
+          id: shapeId,
+          type: 'geo',
+          x: el.x,
+          y: el.y,
+          props: {
+            w: el.width,
+            h: el.height,
+            geo: geoType,
+            fill: el.type === 'postit' ? 'solid' : 'none',
+            color,
+            labelColor: el.type === 'postit' ? 'black' : 'black',
+            dash: 'draw',
+            size: 'm',
+            font: 'draw',
+            text: el.text || el.content || '',
+            align: 'middle',
+            verticalAlign: 'middle',
+          },
+        });
 
-        // Add text as separate text shape
-        if (el.text || el.content) {
-          const textId = createShapeId();
-          tldrawEditor.createShape({
-            id: textId,
-            type: 'text',
-            x: el.x,
-            y: el.y,
-            props: {
-              text: el.text || el.content || 'Texto',
-              w: el.width - 20,
-              h: el.height - 20,
-              color: el.type === 'postit' ? 'black' : 'white',
-              size: 'm',
-              font: 'draw',
-              align: 'middle',
-              autoSize: false,
-            },
-          });
-        }
-
-        nodeMap.set(el.id, { shapeId, center: { x: el.x + el.width / 2, y: el.y + el.height / 2 } });
+        nodeMap.set(el.id, {
+          shapeId,
+          center: { x: el.x + el.width / 2, y: el.y + el.height / 2 },
+          width: el.width,
+          height: el.height,
+        });
       });
 
       // Create arrows
@@ -363,20 +372,26 @@ export default function Whiteboard() {
         if (from && to) {
           const start = from.center;
           const end = to.center;
-          const angle = Math.atan2(end.y - start.y, end.x - start.x);
-          const gap = 10;
-          const startOffset = 50 + gap;
-          const endOffset = 50 + gap;
+          const dx = end.x - start.x;
+          const dy = end.y - start.y;
+          const gap = 12;
 
-          const realStart = {
-            x: start.x + Math.cos(angle) * startOffset,
-            y: start.y + Math.sin(angle) * startOffset
-          };
+          let realStart = start;
+          let realEnd = end;
 
-          const realEnd = {
-            x: end.x - Math.cos(angle) * endOffset,
-            y: end.y - Math.sin(angle) * endOffset
-          };
+          if (Math.abs(dy) >= Math.abs(dx)) {
+            const startOffset = (from.height / 2) + gap;
+            const endOffset = (to.height / 2) + gap;
+            const sign = Math.sign(dy) || 1;
+            realStart = { x: start.x, y: start.y + sign * startOffset };
+            realEnd = { x: end.x, y: end.y - sign * endOffset };
+          } else {
+            const startOffset = (from.width / 2) + gap;
+            const endOffset = (to.width / 2) + gap;
+            const sign = Math.sign(dx) || 1;
+            realStart = { x: start.x + sign * startOffset, y: start.y };
+            realEnd = { x: end.x - sign * endOffset, y: end.y };
+          }
 
           tldrawEditor.createShape({
             id: createShapeId(),
@@ -390,27 +405,21 @@ export default function Whiteboard() {
               arrowheadEnd: 'arrow',
               color: 'grey',
               size: 'm',
+              text: edge.label || '',
+              labelPosition: 0.5,
             },
           });
         }
       });
     });
 
-    toast.success(`${processedNodes.length} elementos criados pelo assistente`);
+    const toastId = toast.success(`${processedNodes.length} elementos criados pelo assistente`, {
+      action: {
+        label: 'X',
+        onClick: () => toast.dismiss(toastId),
+      },
+    });
   }, [tldrawEditor]);
-
-  // Group comments by position (for markers)
-  const commentMarkers = comments
-    .filter(c => c.position_x !== null && c.position_y !== null && !c.parent_comment_id)
-    .reduce((acc, comment) => {
-      const key = `${Math.round(comment.position_x! / 20)}-${Math.round(comment.position_y! / 20)}`;
-      if (!acc[key]) {
-        acc[key] = { x: comment.position_x!, y: comment.position_y!, comments: [], resolved: true };
-      }
-      acc[key].comments.push(comment);
-      if (!comment.resolved) acc[key].resolved = false;
-      return acc;
-    }, {} as Record<string, { x: number; y: number; comments: typeof comments; resolved: boolean }>);
 
   if (!selectedWhiteboardId) {
     return (
@@ -603,7 +612,6 @@ export default function Whiteboard() {
               <WhiteboardHeader
                 whiteboard={whiteboard}
                 branches={branches}
-                selectedWhiteboardId={selectedWhiteboardId}
                 onCreateBranch={async (name) => {
                   if (selectedWhiteboardId) {
                     await createBranch(selectedWhiteboardId, name);
@@ -618,18 +626,6 @@ export default function Whiteboard() {
                 }}
                 onSelectBranch={setSelectedWhiteboardId}
                 branchLoading={branchLoading}
-                commentMode={commentMode}
-                setCommentMode={setCommentMode}
-                mentions={mentions}
-                unreadCount={unreadCount}
-                markAsRead={markAsRead}
-                markAllAsRead={markAllAsRead}
-                onNavigateToComment={(whiteboardId) => {
-                  const wb = whiteboards.find(w => w.id === whiteboardId);
-                  if (wb) {
-                    setSelectedWhiteboardId(whiteboardId);
-                  }
-                }}
                 collaborators={collaborators}
                 userColor={userColor}
                 onHome={() => tldrawEditor?.setCamera({ x: 0, y: 0, z: 1 })}
@@ -641,15 +637,11 @@ export default function Whiteboard() {
                 <>
                   <TldrawWhiteboard
                     whiteboardId={selectedWhiteboardId}
-                    commentMode={commentMode}
-                    onCanvasClick={(point) => {
-                      setActiveCommentPosition(point);
-                      setCommentMode(false);
-                    }}
                     onEditorReady={(editor) => {
                       setTldrawEditor(editor);
                       handleRemoteActivity();
                     }}
+                    onAnalyzeSelection={handleAnalyzeSelection}
                     drawerState={isBoardsDrawerOpen}
                     isEditable={!isBoardsDrawerOpen}
                     onCanvasInteraction={() => {
@@ -679,78 +671,9 @@ export default function Whiteboard() {
                 </>
               )}
 
-              {/* Comment markers on canvas */}
-              {tldrawEditor && Object.entries(commentMarkers).map(([key, marker]) => {
-                const screenPoint = tldrawEditor.pageToScreen({ x: marker.x, y: marker.y });
-                return (
-                  <CommentMarker
-                    key={key}
-                    x={screenPoint.x}
-                    y={screenPoint.y}
-                    count={marker.comments.length}
-                    resolved={marker.resolved}
-                    onClick={() => setActiveCommentPosition({ x: marker.x, y: marker.y })}
-                  />
-                );
-              })}
-
-              {/* Active comment thread */}
-              {activeCommentPosition && tldrawEditor && canvasContainerRef.current && (
-                <div
-                  className="absolute z-20"
-                  style={{
-                    left: Math.min(
-                      tldrawEditor.pageToScreen({ x: activeCommentPosition.x, y: activeCommentPosition.y }).x + 20,
-                      (canvasContainerRef.current?.getBoundingClientRect().width || window.innerWidth) - 340
-                    ),
-                    top: Math.min(
-                      tldrawEditor.pageToScreen({ x: activeCommentPosition.x, y: activeCommentPosition.y }).y,
-                      (canvasContainerRef.current?.getBoundingClientRect().height || window.innerHeight) - 450
-                    ),
-                    pointerEvents: 'auto',
-                  }}
-                  onPointerDown={(e) => {
-                    // Permitir interação com o CommentThread
-                    e.stopPropagation();
-                  }}
-                >
-                  <CommentThread
-                    comments={comments.filter(c => {
-                      if (c.position_x === null || c.position_y === null) return false;
-                      const dx = Math.abs(c.position_x - activeCommentPosition.x);
-                      const dy = Math.abs(c.position_y - activeCommentPosition.y);
-                      return dx < 30 && dy < 30;
-                    })}
-                    onClose={() => setActiveCommentPosition(null)}
-                    onAddComment={async (content, parentId) => {
-                      await createComment(
-                        content,
-                        undefined,
-                        activeCommentPosition.x,
-                        activeCommentPosition.y,
-                        parentId
-                      );
-                    }}
-                    onDeleteComment={deleteComment}
-                    onResolve={toggleResolved}
-                    currentUserId={currentUserId}
-                    projectId={projectId}
-                  />
-                </div>
-              )}
-
-
-
-
               {saving && (
                 <div className="absolute bottom-4 right-4 bg-background/80 px-3 py-1.5 rounded-full text-xs flex items-center gap-2">
                   <Loader2 className="h-3 w-3 animate-spin" /> Salvando...
-                </div>
-              )}
-
-              {commentMode && (
-                <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-primary text-primary-foreground px-4 py-2 rounded-full text-sm">
-                  Clique no canvas para adicionar um comentário
                 </div>
               )}
 
@@ -764,7 +687,7 @@ export default function Whiteboard() {
 
         <BearCursor
           containerRef={canvasContainerRef}
-          isActive={!isAssistantOpen && !commentMode}
+          isActive={!isAssistantOpen}
           onClick={() => setIsAssistantOpen(true)}
           activeTool={activeTool}
         />
@@ -774,6 +697,11 @@ export default function Whiteboard() {
           onClose={() => setIsAssistantOpen(false)}
           onCreateElements={handleCreateElementsFromAI}
           activeTool={activeTool}
+          whiteboardId={selectedWhiteboardId ?? undefined}
+          analysisRequest={assistantAnalysisRequest ?? undefined}
+          onAnalysisHandled={(id) =>
+            setAssistantAnalysisRequest((prev) => (prev?.id === id ? null : prev))
+          }
         />
       </div>
     </TooltipProvider>

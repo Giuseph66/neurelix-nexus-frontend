@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
+import { apiFetch } from '@/lib/api';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
@@ -9,7 +10,6 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, CheckCircle2, AlertCircle, Mail, Eye, EyeOff } from 'lucide-react';
 import { useAcceptInvite } from '@/hooks/useProjectInvites';
 import { usePageTitle } from '@/hooks/usePageTitle';
-import { supabase } from '@/integrations/supabase/client';
 
 export default function AcceptInvite() {
   const [searchParams] = useSearchParams();
@@ -17,6 +17,8 @@ export default function AcceptInvite() {
   const { user, signUp, signIn } = useAuth();
   const token = searchParams.get('token');
   const acceptInviteMutation = useAcceptInvite();
+  const acceptedProjectId =
+    acceptInviteMutation.data && !acceptInviteMutation.data.requiresAuth ? acceptInviteMutation.data.project_id : null;
 
   const [isSigningUp, setIsSigningUp] = useState(false);
   const [email, setEmail] = useState('');
@@ -35,28 +37,28 @@ export default function AcceptInvite() {
 
     const fetchInviteInfo = async () => {
       try {
-        const { data, error } = await supabase
-          .from('project_invites')
-          .select('email, expires_at, accepted_at')
-          .eq('token', token)
-          .maybeSingle();
+        // Usa o endpoint público (sem auth) para obter infos do convite
+        const res = await apiFetch<{ invite?: { email: string; expires_at: string; accepted_at: string | null }; requiresAuth?: boolean }>(
+          `/functions/v1/project-invites/accept/${token}`,
+          { method: 'POST', auth: false }
+        );
 
-        if (error || !data) {
+        const invite = res.invite;
+        if (!invite?.email || !invite.expires_at) {
           setError('Convite inválido ou expirado');
           setInviteEmail(null);
           return;
         }
 
-        const expired = data.expires_at && new Date(data.expires_at) < new Date();
-        if (expired || data.accepted_at) {
+        const expired = new Date(invite.expires_at) < new Date();
+        if (expired || invite.accepted_at) {
           setError('Convite inválido ou expirado');
           setInviteEmail(null);
           return;
         }
 
-        // Email válido do convite
-        setInviteEmail(data.email);
-        setEmail(data.email);
+        setInviteEmail(invite.email);
+        setEmail(invite.email);
       } catch (e) {
         console.error('Erro ao carregar informações do convite:', e);
         setError('Erro ao carregar informações do convite');
@@ -85,7 +87,8 @@ export default function AcceptInvite() {
     acceptInviteMutation.mutate(token, {
       onSuccess: (data) => {
         if (data.requiresAuth) {
-          // Precisa fazer login primeiro
+          // Precisa estar logado (ou o token não foi enviado)
+          setError('Faça login para aceitar o convite.');
           return;
         }
         // Redirecionar para o projeto
@@ -164,8 +167,8 @@ export default function AcceptInvite() {
     );
   }
 
-  // Se usuário já está logado e convite foi aceito
-  if (user && acceptInviteMutation.isSuccess) {
+  // Se usuário já está logado e convite foi aceito (de verdade)
+  if (user && acceptedProjectId) {
     return (
       <div className="flex min-h-screen items-center justify-center p-4">
         <Card className="w-full max-w-md">

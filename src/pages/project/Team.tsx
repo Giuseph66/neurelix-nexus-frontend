@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { useParams } from "react-router-dom";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -53,7 +53,9 @@ interface ProjectMember {
   user_id: string;
   created_at: string;
   profiles: {
-    full_name: string | null;
+    id?: string;
+    full_name?: string | null;
+    avatar_url?: string | null;
   } | null;
 }
 
@@ -77,15 +79,8 @@ export default function Team() {
     queryKey: ["project-role", projectId],
     queryFn: async () => {
       if (!projectId || !user) return null;
-      const { data, error } = await supabase
-        .from("project_members")
-        .select("role")
-        .eq("project_id", projectId)
-        .eq("user_id", user.id)
-        .maybeSingle();
-
-      if (error) throw error;
-      return data?.role as AppRole | null;
+      const data = await apiFetch<{ role: AppRole }>(`/projects/${projectId}/role`, { auth: true });
+      return data.role;
     },
     enabled: !!projectId && !!user,
   });
@@ -94,57 +89,31 @@ export default function Team() {
     queryKey: ["project", projectId],
     queryFn: async () => {
       if (!projectId) return null;
-      const { data, error } = await supabase
-        .from("projects")
-        .select("*")
-        .eq("id", projectId)
-        .maybeSingle();
-
-      if (error) throw error;
-      return data;
+      return await apiFetch(`/projects/${projectId}`, { auth: true });
     },
     enabled: !!projectId,
   });
 
-  const { data: members, isLoading } = useQuery({
+  const { data: membersData, isLoading } = useQuery({
     queryKey: ["project-members", projectId],
     queryFn: async () => {
-      // First get members
-      const { data: membersData, error: membersError } = await supabase
-        .from("project_members")
-        .select("id, role, user_id, created_at")
-        .eq("project_id", projectId!)
-        .order("created_at", { ascending: true });
-
-      if (membersError) throw membersError;
-      if (!membersData) return [];
-
-      // Then get profiles for these members
-      const userIds = membersData.map((m) => m.user_id);
-      const { data: profilesData } = await supabase
-        .from("profiles")
-        .select("user_id, full_name")
-        .in("user_id", userIds);
-
-      // Merge data
-      return membersData.map((member) => ({
-        ...member,
-        profiles: profilesData?.find((p) => p.user_id === member.user_id) || null,
-      })) as ProjectMember[];
+      if (!projectId) return { members: [] };
+      return await apiFetch<{ members: ProjectMember[] }>(`/projects/${projectId}/members`, { auth: true });
     },
     enabled: !!projectId,
   });
+
+  const members = membersData?.members || [];
 
   usePageTitle("Equipe", project?.name);
 
   const updateRoleMutation = useMutation({
     mutationFn: async ({ memberId, newRole }: { memberId: string; newRole: AppRole }) => {
-      const { error } = await supabase
-        .from("project_members")
-        .update({ role: newRole })
-        .eq("id", memberId);
-
-      if (error) throw error;
+      await apiFetch(`/projects/${projectId}/members/${memberId}`, {
+        method: 'PUT',
+        body: { role: newRole },
+        auth: true,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["project-members", projectId] });
@@ -161,12 +130,10 @@ export default function Team() {
 
   const removeMemberMutation = useMutation({
     mutationFn: async (memberId: string) => {
-      const { error } = await supabase
-        .from("project_members")
-        .delete()
-        .eq("id", memberId);
-
-      if (error) throw error;
+      await apiFetch(`/projects/${projectId}/members/${memberId}`, {
+        method: 'DELETE',
+        auth: true,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["project-members", projectId] });

@@ -4,6 +4,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
@@ -68,6 +69,9 @@ export function CreateTarefaDialog({
         <form onSubmit={handleSubmit}>
           <DialogHeader>
             <DialogTitle>Criar Nova Tarefa</DialogTitle>
+            <DialogDescription>
+              Preencha os campos abaixo para criar uma tarefa no projeto.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="space-y-4 py-4">

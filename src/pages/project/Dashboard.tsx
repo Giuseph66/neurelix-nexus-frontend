@@ -1,6 +1,6 @@
 import { useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/api";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Loader2, PenTool, ListTodo, GitBranch, Users } from "lucide-react";
 import { usePageTitle } from "@/hooks/usePageTitle";
@@ -11,44 +11,24 @@ export default function Dashboard() {
   const { data: project, isLoading: projectLoading } = useQuery({
     queryKey: ["project", projectId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("projects")
-        .select("*")
-        .eq("id", projectId)
-        .maybeSingle();
-
-      if (error) throw error;
-      return data;
+      if (!projectId) return null;
+      return await apiFetch(`/projects/${projectId}`);
     },
     enabled: !!projectId,
   });
 
   usePageTitle("Dashboard", project?.name);
 
-  const { data: members, isLoading: membersLoading } = useQuery({
+  const { data: membersData, isLoading: membersLoading } = useQuery({
     queryKey: ["project-members", projectId],
     queryFn: async () => {
-      const { data: membersData, error: membersError } = await supabase
-        .from("project_members")
-        .select("id, role, user_id")
-        .eq("project_id", projectId!);
-
-      if (membersError) throw membersError;
-      if (!membersData) return [];
-
-      const userIds = membersData.map((m) => m.user_id);
-      const { data: profilesData } = await supabase
-        .from("profiles")
-        .select("user_id, full_name")
-        .in("user_id", userIds);
-
-      return membersData.map((member) => ({
-        ...member,
-        profiles: profilesData?.find((p) => p.user_id === member.user_id) || null,
-      }));
+      if (!projectId) return { members: [] };
+      return await apiFetch<{ members: Array<{ id: string; role: string; user_id: string; created_at: string; profiles: { full_name: string | null } | null }> }>(`/projects/${projectId}/members`);
     },
     enabled: !!projectId,
   });
+  
+  const members = membersData?.members || [];
 
   if (projectLoading || membersLoading) {
     return (

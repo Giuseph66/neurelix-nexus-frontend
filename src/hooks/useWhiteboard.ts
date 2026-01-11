@@ -1,15 +1,14 @@
 import { useState, useCallback, useEffect } from "react";
-import { supabase } from "@/integrations/supabase/client";
+import { apiFetch } from "@/lib/api";
 import { toast } from "sonner";
 import { Whiteboard, WhiteboardObject, CanvasViewport } from "@/components/whiteboard/types";
-import { Json } from "@/integrations/supabase/types";
 
 interface UseWhiteboardOptions {
   projectId: string;
   whiteboardId?: string;
 }
 
-function parseViewport(data: Json | null): CanvasViewport {
+function parseViewport(data: any): CanvasViewport {
   if (data && typeof data === 'object' && !Array.isArray(data)) {
     const obj = data as Record<string, unknown>;
     return {
@@ -21,14 +20,14 @@ function parseViewport(data: Json | null): CanvasViewport {
   return { x: 0, y: 0, zoom: 1 };
 }
 
-function parseJsonObject(data: Json | null): Record<string, unknown> {
+function parseJsonObject(data: any): Record<string, unknown> {
   if (data && typeof data === 'object' && !Array.isArray(data)) {
     return data as Record<string, unknown>;
   }
   return {};
 }
 
-function parseSnapshot(data: Json | null): Record<string, unknown> | null {
+function parseSnapshot(data: any): Record<string, unknown> | null {
   if (data && typeof data === 'object' && !Array.isArray(data)) {
     return data as Record<string, unknown>;
   }
@@ -45,21 +44,15 @@ export function useWhiteboard({ projectId, whiteboardId }: UseWhiteboardOptions)
   // Fetch all whiteboards for project
   const fetchWhiteboards = useCallback(async () => {
     try {
-      const { data, error } = await supabase
-        .from('whiteboards')
-        .select('*')
-        .eq('project_id', projectId)
-        .order('created_at', { ascending: false });
-
-      if (error) throw error;
+      const data = await apiFetch<any[]>(`/whiteboards?projectId=${projectId}`);
       
       const typedData = (data || []).map(wb => ({
         ...wb,
         viewport: parseViewport(wb.viewport),
         branch_metadata: parseJsonObject(wb.branch_metadata),
         settings: parseJsonObject(wb.settings),
-        canvas_snapshot: parseSnapshot((wb as any).canvas_snapshot ?? null),
-        snapshot_version: typeof (wb as any).snapshot_version === 'number' ? (wb as any).snapshot_version : 0,
+        canvas_snapshot: parseSnapshot(wb.canvas_snapshot ?? null),
+        snapshot_version: typeof wb.snapshot_version === 'number' ? wb.snapshot_version : 0,
       }));
       
       setWhiteboards(typedData);
@@ -73,25 +66,15 @@ export function useWhiteboard({ projectId, whiteboardId }: UseWhiteboardOptions)
   const fetchWhiteboard = useCallback(async (id: string) => {
     setLoading(true);
     try {
-      const { data: wb, error: wbError } = await supabase
-        .from('whiteboards')
-        .select('*')
-        .eq('id', id)
-        .maybeSingle();
-
-      if (wbError) throw wbError;
-      if (!wb) {
-        toast.error('Quadro não encontrado');
-        return;
-      }
+      const wb = await apiFetch<any>(`/whiteboards/${id}`);
 
       const typedWb: Whiteboard = {
         ...wb,
         viewport: parseViewport(wb.viewport),
         branch_metadata: parseJsonObject(wb.branch_metadata),
         settings: parseJsonObject(wb.settings),
-        canvas_snapshot: parseSnapshot((wb as any).canvas_snapshot ?? null),
-        snapshot_version: typeof (wb as any).snapshot_version === 'number' ? (wb as any).snapshot_version : 0,
+        canvas_snapshot: parseSnapshot(wb.canvas_snapshot ?? null),
+        snapshot_version: typeof wb.snapshot_version === 'number' ? wb.snapshot_version : 0,
       };
       setWhiteboard(typedWb);
 
@@ -108,28 +91,18 @@ export function useWhiteboard({ projectId, whiteboardId }: UseWhiteboardOptions)
   // Create new whiteboard
   const createWhiteboard = useCallback(async (name: string) => {
     try {
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('Usuário não autenticado');
-
-      const { data, error } = await supabase
-        .from('whiteboards')
-        .insert({
-          project_id: projectId,
-          name,
-          created_by: user.id,
-        })
-        .select()
-        .single();
-
-      if (error) throw error;
+      const data = await apiFetch<any>(`/whiteboards?projectId=${projectId}`, {
+        method: 'POST',
+        body: { name },
+      });
 
       const typedData: Whiteboard = {
         ...data,
         viewport: parseViewport(data.viewport),
         branch_metadata: parseJsonObject(data.branch_metadata),
         settings: parseJsonObject(data.settings),
-        canvas_snapshot: parseSnapshot((data as any).canvas_snapshot ?? null),
-        snapshot_version: typeof (data as any).snapshot_version === 'number' ? (data as any).snapshot_version : 0,
+        canvas_snapshot: parseSnapshot(data.canvas_snapshot ?? null),
+        snapshot_version: typeof data.snapshot_version === 'number' ? data.snapshot_version : 0,
       };
 
       setWhiteboards(prev => [typedData, ...prev]);
@@ -145,12 +118,7 @@ export function useWhiteboard({ projectId, whiteboardId }: UseWhiteboardOptions)
   // Delete whiteboard
   const deleteWhiteboard = useCallback(async (id: string) => {
     try {
-      const { error } = await supabase
-        .from('whiteboards')
-        .delete()
-        .eq('id', id);
-
-      if (error) throw error;
+      await apiFetch(`/whiteboards/${id}`, { method: 'DELETE' });
 
       setWhiteboards(prev => prev.filter(wb => wb.id !== id));
       toast.success('Quadro excluído');
@@ -165,12 +133,10 @@ export function useWhiteboard({ projectId, whiteboardId }: UseWhiteboardOptions)
     if (!whiteboardId) return;
 
     try {
-      const { error } = await supabase
-        .from('whiteboards')
-        .update({ viewport: viewport as unknown as Json })
-        .eq('id', whiteboardId);
-
-      if (error) throw error;
+      await apiFetch(`/whiteboards/${whiteboardId}`, {
+        method: 'PUT',
+        body: { viewport },
+      });
     } catch (error) {
       console.error('Error saving viewport:', error);
     }
@@ -190,33 +156,16 @@ export function useWhiteboard({ projectId, whiteboardId }: UseWhiteboardOptions)
         })(),
       });
 
-      const { data, error } = await supabase
-        .from('whiteboards')
-        .update({
-          canvas_snapshot: snapshot as unknown as Json,
-        })
-        .eq('id', whiteboardId)
-        .select('id, canvas_snapshot, snapshot_version')
-        .maybeSingle();
+      const data = await apiFetch<any>(`/whiteboards/${whiteboardId}`, {
+        method: 'PUT',
+        body: { canvas_snapshot: snapshot },
+      });
 
-      if (error) {
-        console.error('[Whiteboard] Snapshot update failed (supabase)', {
-          whiteboardId,
-          message: (error as any)?.message,
-          details: (error as any)?.details,
-          hint: (error as any)?.hint,
-          code: (error as any)?.code,
-        });
-        throw error;
-      }
-
-      if (data) {
-        setWhiteboard(prev => prev ? {
-          ...prev,
-          canvas_snapshot: parseSnapshot((data as any).canvas_snapshot ?? null),
-          snapshot_version: typeof (data as any).snapshot_version === 'number' ? (data as any).snapshot_version : prev.snapshot_version,
-        } : prev);
-      }
+      setWhiteboard(prev => prev ? {
+        ...prev,
+        canvas_snapshot: parseSnapshot(data.canvas_snapshot ?? null),
+        snapshot_version: typeof data.snapshot_version === 'number' ? data.snapshot_version : prev.snapshot_version,
+      } : prev);
 
       const duration = Date.now() - startTime;
       console.log('[Whiteboard] Save completed (canvas_snapshot)', {
@@ -227,13 +176,10 @@ export function useWhiteboard({ projectId, whiteboardId }: UseWhiteboardOptions)
       console.error('Error saving canvas snapshot:', {
         error,
         message: error?.message,
-        details: error?.details,
-        hint: error?.hint,
-        code: error?.code,
       });
       const msg = String(error?.message || '');
-      if (msg.toLowerCase().includes('row-level security') || msg.toLowerCase().includes('rls')) {
-        toast.error('Sem permissão para editar este quadro (RLS). Verifique seu papel no projeto (precisa ser admin/tech_lead/developer).');
+      if (msg.toLowerCase().includes('forbidden') || msg.toLowerCase().includes('unauthorized')) {
+        toast.error('Sem permissão para editar este quadro. Verifique seu papel no projeto (precisa ser admin/tech_lead/developer).');
       } else {
         toast.error('Erro ao salvar quadro');
       }
@@ -245,12 +191,10 @@ export function useWhiteboard({ projectId, whiteboardId }: UseWhiteboardOptions)
   // Rename whiteboard
   const renameWhiteboard = useCallback(async (id: string, name: string) => {
     try {
-      const { error } = await supabase
-        .from('whiteboards')
-        .update({ name })
-        .eq('id', id);
-
-      if (error) throw error;
+      await apiFetch(`/whiteboards/${id}`, {
+        method: 'PUT',
+        body: { name },
+      });
 
       setWhiteboards(prev => prev.map(wb => 
         wb.id === id ? { ...wb, name } : wb

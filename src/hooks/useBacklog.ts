@@ -1,7 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
+import { apiFetch } from '@/lib/api';
 import type { Tarefa, Sprint } from '@/types/tarefas';
 
 // Hook to fetch backlog items (tarefas without sprint or board-specific)
@@ -11,32 +10,20 @@ export function useBacklog(projectId: string | undefined) {
     queryFn: async () => {
       if (!projectId) return { tarefas: [], epics: [], sprints: [] };
 
-      // Fetch all tarefas for project, sorted by backlog position
-      const { data: tarefas, error: tarefasError } = await supabase
-        .from('tarefas')
-        .select('*')
-        .eq('project_id', projectId)
-        .order('backlog_position', { ascending: true, nullsFirst: false });
-      
-      if (tarefasError) throw tarefasError;
+      // Fetch all tarefas for project
+      const tarefas = await apiFetch<Tarefa[]>(`/tarefas?projectId=${projectId}`, { auth: true });
 
-      // Fetch sprints
-      const { data: sprints, error: sprintsError } = await supabase
-        .from('sprints')
-        .select('*')
-        .eq('project_id', projectId)
-        .order('created_at', { ascending: false });
-      
-      if (sprintsError) throw sprintsError;
+      // Fetch sprints for project
+      const sprints = await apiFetch<Sprint[]>(`/sprints?projectId=${projectId}`, { auth: true });
 
       // Separate epics from regular tarefas
-      const epics = (tarefas || []).filter(t => t.type === 'EPIC');
-      const regularTarefas = (tarefas || []).filter(t => t.type !== 'EPIC');
+      const epics = tarefas.filter(t => t.type === 'EPIC');
+      const regularTarefas = tarefas.filter(t => t.type !== 'EPIC');
 
       return {
-        tarefas: regularTarefas as Tarefa[],
-        epics: epics as Tarefa[],
-        sprints: (sprints || []) as Sprint[],
+        tarefas: regularTarefas,
+        epics,
+        sprints,
       };
     },
     enabled: !!projectId,
@@ -49,16 +36,8 @@ export function useEpics(projectId: string | undefined) {
     queryKey: ['epics', projectId],
     queryFn: async () => {
       if (!projectId) return [];
-
-      const { data, error } = await supabase
-        .from('tarefas')
-        .select('*')
-        .eq('project_id', projectId)
-        .eq('type', 'EPIC')
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      return data as Tarefa[];
+      const tarefas = await apiFetch<Tarefa[]>(`/tarefas?projectId=${projectId}`, { auth: true });
+      return tarefas.filter(t => t.type === 'EPIC');
     },
     enabled: !!projectId,
   });
@@ -67,29 +46,19 @@ export function useEpics(projectId: string | undefined) {
 // Reorder backlog items
 export function useReorderBacklog() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async ({ projectId, orderedIds }: { projectId: string; orderedIds: string[] }) => {
       // Update each tarefa with new position
-      const updates = orderedIds.map((id, index) => 
-        supabase
-          .from('tarefas')
-          .update({ backlog_position: index })
-          .eq('id', id)
+      await Promise.all(
+        orderedIds.map((id, index) =>
+          apiFetch(`/tarefas/${id}`, {
+            method: 'PUT',
+            body: { backlog_position: index },
+            auth: true,
+          })
+        )
       );
-
-      await Promise.all(updates);
-
-      // Log activity for reorder
-      if (user?.id) {
-        await supabase.from('tarefa_activity_log').insert({
-          tarefa_id: orderedIds[0],
-          user_id: user.id,
-          action: 'reordered',
-          metadata: { new_order: orderedIds },
-        });
-      }
 
       return orderedIds;
     },
@@ -105,31 +74,16 @@ export function useReorderBacklog() {
 // Assign tarefa to sprint
 export function useAssignToSprint() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async ({ tarefaId, sprintId, projectId }: { tarefaId: string; sprintId: string | null; projectId: string }) => {
-      const { data, error } = await supabase
-        .from('tarefas')
-        .update({ sprint_id: sprintId })
-        .eq('id', tarefaId)
-        .select()
-        .single();
-      
-      if (error) throw error;
+      const tarefa = await apiFetch<Tarefa>(`/tarefas/${tarefaId}`, {
+        method: 'PUT',
+        body: { sprint_id: sprintId },
+        auth: true,
+      });
 
-      // Log activity
-      if (user?.id) {
-        await supabase.from('tarefa_activity_log').insert({
-          tarefa_id: tarefaId,
-          user_id: user.id,
-          action: 'sprint_changed',
-          field_name: 'sprint',
-          new_value: sprintId,
-        });
-      }
-
-      return { tarefa: data, projectId };
+      return { tarefa, projectId };
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['backlog', result.projectId] });
@@ -145,31 +99,16 @@ export function useAssignToSprint() {
 // Assign tarefa to epic
 export function useAssignToEpic() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async ({ tarefaId, epicId, projectId }: { tarefaId: string; epicId: string | null; projectId: string }) => {
-      const { data, error } = await supabase
-        .from('tarefas')
-        .update({ epic_id: epicId })
-        .eq('id', tarefaId)
-        .select()
-        .single();
-      
-      if (error) throw error;
+      const tarefa = await apiFetch<Tarefa>(`/tarefas/${tarefaId}`, {
+        method: 'PUT',
+        body: { epic_id: epicId },
+        auth: true,
+      });
 
-      // Log activity
-      if (user?.id) {
-        await supabase.from('tarefa_activity_log').insert({
-          tarefa_id: tarefaId,
-          user_id: user.id,
-          action: 'epic_changed',
-          field_name: 'epic',
-          new_value: epicId,
-        });
-      }
-
-      return { tarefa: data, projectId };
+      return { tarefa, projectId };
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['backlog', result.projectId] });
@@ -185,7 +124,6 @@ export function useAssignToEpic() {
 // Create sprint
 export function useCreateSprint() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async ({ 
@@ -203,23 +141,20 @@ export function useCreateSprint() {
       startDate?: string; 
       endDate?: string;
     }) => {
-      const { data, error } = await supabase
-        .from('sprints')
-        .insert({
+      const sprint = await apiFetch<Sprint>('/sprints', {
+        method: 'POST',
+        body: {
           project_id: projectId,
           board_id: boardId,
           name,
           goal,
           start_date: startDate,
           end_date: endDate,
-          state: 'PLANNED',
-          created_by: user?.id,
-        })
-        .select()
-        .single();
+        },
+        auth: true,
+      });
       
-      if (error) throw error;
-      return { sprint: data as Sprint, projectId };
+      return { sprint, projectId };
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['backlog', result.projectId] });
@@ -237,25 +172,12 @@ export function useStartSprint() {
 
   return useMutation({
     mutationFn: async ({ sprintId, projectId }: { sprintId: string; projectId: string }) => {
-      // First close any active sprint
-      await supabase
-        .from('sprints')
-        .update({ state: 'DONE' })
-        .eq('project_id', projectId)
-        .eq('state', 'ACTIVE');
-
-      const { data, error } = await supabase
-        .from('sprints')
-        .update({ 
-          state: 'ACTIVE',
-          start_date: new Date().toISOString().split('T')[0],
-        })
-        .eq('id', sprintId)
-        .select()
-        .single();
+      const sprint = await apiFetch<Sprint>(`/sprints/${sprintId}/start`, {
+        method: 'POST',
+        auth: true,
+      });
       
-      if (error) throw error;
-      return { sprint: data as Sprint, projectId };
+      return { sprint, projectId };
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['backlog', result.projectId] });
@@ -273,45 +195,12 @@ export function useCompleteSprint() {
 
   return useMutation({
     mutationFn: async ({ sprintId, projectId }: { sprintId: string; projectId: string }) => {
-      // Mark sprint as done
-      const { data: sprint, error } = await supabase
-        .from('sprints')
-        .update({ 
-          state: 'DONE',
-          end_date: new Date().toISOString().split('T')[0],
-        })
-        .eq('id', sprintId)
-        .select()
-        .single();
-      
-      if (error) throw error;
+      const sprint = await apiFetch<Sprint>(`/sprints/${sprintId}/complete`, {
+        method: 'POST',
+        auth: true,
+      });
 
-      // Move incomplete tarefas back to backlog (remove sprint_id)
-      // Get tarefas in sprint that are not in final status
-      const { data: workflows } = await supabase
-        .from('workflows')
-        .select('id');
-      
-      if (workflows && workflows.length > 0) {
-        const workflowIds = workflows.map(w => w.id);
-        
-        const { data: finalStatuses } = await supabase
-          .from('workflow_statuses')
-          .select('id')
-          .in('workflow_id', workflowIds)
-          .eq('is_final', true);
-        
-        const finalStatusIds = (finalStatuses || []).map(s => s.id);
-
-        // Update tarefas that are not done
-        await supabase
-          .from('tarefas')
-          .update({ sprint_id: null })
-          .eq('sprint_id', sprintId)
-          .not('status_id', 'in', `(${finalStatusIds.join(',')})`);
-      }
-
-      return { sprint: sprint as Sprint, projectId };
+      return { sprint, projectId };
     },
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['backlog', result.projectId] });

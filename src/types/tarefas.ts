@@ -181,6 +181,7 @@ export interface CreateTarefaInput {
 export interface UpdateTarefaInput {
   title?: string;
   description?: string;
+  type?: TarefaType;
   priority?: TarefaPriority;
   assignee_id?: string | null;
   epic_id?: string | null;
@@ -207,11 +208,11 @@ export interface CreateCommentInput {
 
 // Priority display helpers
 export const PRIORITY_CONFIG: Record<TarefaPriority, { label: string; color: string; icon: string }> = {
-  HIGHEST: { label: 'Highest', color: '#DC2626', icon: '⬆️⬆️' },
-  HIGH: { label: 'High', color: '#EA580C', icon: '⬆️' },
-  MEDIUM: { label: 'Medium', color: '#CA8A04', icon: '➡️' },
-  LOW: { label: 'Low', color: '#16A34A', icon: '⬇️' },
-  LOWEST: { label: 'Lowest', color: '#0D9488', icon: '⬇️⬇️' },
+  HIGHEST: { label: 'Máxima', color: '#DC2626', icon: '⬆️⬆️' },
+  HIGH: { label: 'Alta', color: '#EA580C', icon: '⬆️' },
+  MEDIUM: { label: 'Média', color: '#CA8A04', icon: '➡️' },
+  LOW: { label: 'Baixa', color: '#16A34A', icon: '⬇️' },
+  LOWEST: { label: 'Mínima', color: '#0D9488', icon: '⬇️⬇️' },
 };
 
 export const TYPE_CONFIG: Record<TarefaType, { label: string; color: string; icon: string }> = {

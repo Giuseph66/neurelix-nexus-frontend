@@ -1,9 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import type { PullRequest, CreatePRInput, SubmitReviewInput, MergePRInput } from '@/types/codigo';
-
-const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
+import { apiFetch } from '@/lib/api';
 
 /**
  * Hook para listar Pull Requests
@@ -14,9 +12,6 @@ export function usePRs(repoId: string | undefined, filters?: { state?: string; p
     queryFn: async () => {
       if (!repoId) return { prs: [], page: 1 };
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
       const params = new URLSearchParams();
       if (filters?.state) params.append('state', filters.state);
       if (filters?.search) params.append('search', filters.search);
@@ -24,20 +19,9 @@ export function usePRs(repoId: string | undefined, filters?: { state?: string; p
       if (filters?.reviewer) params.append('reviewer', filters.reviewer);
       if (filters?.page) params.append('page', filters.page.toString());
 
-      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/repos/${repoId}/pulls?${params.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to fetch PRs');
-      }
-
-      const data = await response.json();
-      return data as { prs: PullRequest[]; page: number };
+      return await apiFetch<{ prs: PullRequest[]; page: number }>(
+        `/functions/v1/github-pulls/repos/${repoId}/pulls?${params.toString()}`
+      );
     },
     enabled: !!repoId,
   });
@@ -52,26 +36,9 @@ export function usePR(repoId: string | undefined, prNumber: number | undefined) 
     queryFn: async () => {
       if (!repoId || !prNumber) return null;
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/pulls/${repoId}/${prNumber}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to fetch PR');
-      }
-
-      const data = await response.json();
-      return {
-        pr: data.pr as PullRequest,
-        linked_tarefas: data.linked_tarefas || [],
-      };
+      return await apiFetch<{ pr: PullRequest; linked_tarefas: unknown[] }>(
+        `/functions/v1/github-pulls/pulls/${repoId}/${prNumber}`
+      );
     },
     enabled: !!repoId && !!prNumber,
   });
@@ -85,32 +52,44 @@ export function useSubmitReview() {
 
   return useMutation({
     mutationFn: async ({ repoId, prNumber, ...input }: { repoId: string; prNumber: number } & SubmitReviewInput) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/repos/${repoId}/pulls/${prNumber}/reviews`, {
+      return await apiFetch(`/functions/v1/github-pulls/repos/${repoId}/pulls/${prNumber}/reviews`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(input),
+        body: input,
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to submit review');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['pr', variables.repoId, variables.prNumber] });
       queryClient.invalidateQueries({ queryKey: ['prs', variables.repoId] });
       toast.success('Review submetido com sucesso!');
     },
-    onError: (error: Error) => {
-      toast.error(error.message || 'Erro ao submeter review');
+    onError: (error: any) => {
+      // Se for ApiError, mostrar a mensagem do backend (que vem do GitHub)
+      const message = error?.payload?.error || error?.message || 'Erro ao submeter review';
+      toast.error(message);
+    },
+  });
+}
+
+/**
+ * Remove o review LOCAL do usuário autenticado para um PR
+ */
+export function useDeleteMyLocalReview() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ repoId, prNumber }: { repoId: string; prNumber: number }) => {
+      return await apiFetch(`/functions/v1/github-pulls/repos/${repoId}/pulls/${prNumber}/reviews`, {
+        method: 'DELETE',
+      });
+    },
+    onSuccess: (data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['pr', variables.repoId, variables.prNumber] });
+      queryClient.invalidateQueries({ queryKey: ['prs', variables.repoId] });
+      toast.success('Review removido.');
+    },
+    onError: (error: any) => {
+      const message = error?.payload?.error || error?.message || 'Erro ao remover review';
+      toast.error(message);
     },
   });
 }
@@ -123,24 +102,10 @@ export function useMergePR() {
 
   return useMutation({
     mutationFn: async ({ repoId, prNumber, ...input }: { repoId: string; prNumber: number } & MergePRInput) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/repos/${repoId}/pulls/${prNumber}/merge`, {
+      return await apiFetch(`/functions/v1/github-pulls/repos/${repoId}/pulls/${prNumber}/merge`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(input),
+        body: input,
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to merge PR');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['pr', variables.repoId, variables.prNumber] });
@@ -162,24 +127,10 @@ export function useCreatePRComment() {
 
   return useMutation({
     mutationFn: async ({ repoId, prNumber, body }: { repoId: string; prNumber: number; body: string }) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/repos/${repoId}/pulls/${prNumber}/comments`, {
+      return await apiFetch(`/functions/v1/github-pulls/repos/${repoId}/pulls/${prNumber}/comments`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ body }),
+        body: { body },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create comment');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['pr', variables.repoId, variables.prNumber] });
@@ -213,24 +164,10 @@ export function useCreatePR() {
       base: string;
       draft?: boolean;
     }) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/repos/${repoId}/pulls`, {
+      return await apiFetch(`/functions/v1/github-pulls/repos/${repoId}/pulls`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ title, description, head, base, draft }),
+        body: { title, description, head, base, draft },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Erro ao criar Pull Request');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['prs', variables.repoId] });
@@ -267,24 +204,10 @@ export function useCreateInlineComment() {
       side: 'LEFT' | 'RIGHT';
       in_reply_to_id?: string;
     }) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/repos/${repoId}/pulls/${prNumber}/inline-comments`, {
+      return await apiFetch(`/functions/v1/github-pulls/repos/${repoId}/pulls/${prNumber}/inline-comments`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ body, path, line, side, in_reply_to_id }),
+        body: { body, path, line, side, in_reply_to_id },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create inline comment');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['pr', variables.repoId, variables.prNumber] });
@@ -305,22 +228,9 @@ export function useReviewInbox(projectId: string | undefined) {
     queryFn: async () => {
       if (!projectId) return { prs: [], pendingCount: 0 };
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/reviews/inbox?projectId=${projectId}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to fetch review inbox');
-      }
-
-      return await response.json() as { prs: PullRequest[]; pendingCount: number };
+      return await apiFetch<{ prs: PullRequest[]; pendingCount: number }>(
+        `/functions/v1/github-pulls/reviews/inbox?projectId=${projectId}`
+      );
     },
     enabled: !!projectId,
   });
@@ -346,24 +256,10 @@ export function useResolveThread() {
       resolution: 'RESOLVED' | 'WONT_FIX';
       reason?: string;
     }) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/repos/${repoId}/pulls/${prNumber}/threads/${threadId}/resolve`, {
+      return await apiFetch(`/functions/v1/github-pulls/repos/${repoId}/pulls/${prNumber}/threads/${threadId}/resolve`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ resolution, reason }),
+        body: { resolution, reason },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to resolve thread');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['pr', variables.repoId, variables.prNumber] });
@@ -395,24 +291,10 @@ export function useAddReaction() {
       reaction: 'like' | 'dislike' | 'contra';
       reason?: string;
     }) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/github-pulls/repos/${repoId}/pulls/${prNumber}/comments/${commentId}/reactions`, {
+      return await apiFetch(`/functions/v1/github-pulls/repos/${repoId}/pulls/${prNumber}/comments/${commentId}/reactions`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ reaction, reason }),
+        body: { reaction, reason },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to add reaction');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['pr', variables.repoId, variables.prNumber] });

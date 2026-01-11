@@ -1,10 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
-import { useAuth } from '@/contexts/AuthContext';
+import { apiFetch } from '@/lib/api';
 import { toast } from 'sonner';
 import type { ProviderConnection } from '@/types/codigo';
-
-const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
 
 /**
  * Hook para listar conexões Git de um projeto
@@ -15,23 +12,9 @@ export function useConnections(projectId: string | undefined) {
     queryFn: async () => {
       if (!projectId) return { connections: [] };
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/git-connect/connections?projectId=${projectId}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to fetch connections');
-      }
-
-      const data = await response.json();
-      return data as { connections: ProviderConnection[] };
+      return await apiFetch<{ connections: ProviderConnection[] }>(
+        `/functions/v1/git-connect/connections?projectId=${projectId}`
+      );
     },
     enabled: !!projectId,
   });
@@ -42,30 +25,13 @@ export function useConnections(projectId: string | undefined) {
  */
 export function useConnectGit() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async ({ projectId, provider = 'github' }: { projectId: string; provider?: 'github' | 'bitbucket' }) => {
-      if (!user) throw new Error('Not authenticated');
-
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/git-connect/start`, {
+      return await apiFetch<{ url: string }>(`/functions/v1/git-connect/start`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ projectId, provider }),
+        body: { projectId, provider },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to start connection');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['git-connections', variables.projectId] });
@@ -101,30 +67,16 @@ export function useProcessCallback() {
       ownerType?: 'user' | 'org';
       ownerName?: string;
     }) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/git-connect/callback`, {
+      return await apiFetch(`/functions/v1/git-connect/callback`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+        body: {
           projectId,
           installationId,
           provider,
           ownerType,
           ownerName,
-        }),
+        },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to process callback');
-      }
-
-      return await response.json();
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['git-connections', variables.projectId] });
@@ -145,27 +97,13 @@ export function useSyncRepos() {
 
   return useMutation({
     mutationFn: async ({ connectionId, repoId }: { connectionId?: string; repoId?: string }) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
       const params = new URLSearchParams();
       if (connectionId) params.append('connectionId', connectionId);
       if (repoId) params.append('repoId', repoId);
 
-      const response = await fetch(`${FUNCTIONS_URL}/git-connect/sync?${params.toString()}`, {
+      return await apiFetch(`/functions/v1/git-connect/sync?${params.toString()}`, {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to sync');
-      }
-
-      return await response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['repos'] });
@@ -186,23 +124,9 @@ export function useRevokeConnection() {
 
   return useMutation({
     mutationFn: async (connectionId: string) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/git-connect/connections/${connectionId}`, {
+      return await apiFetch(`/functions/v1/git-connect/connections/${connectionId}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to revoke connection');
-      }
-
-      return await response.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['git-connections'] });

@@ -9,6 +9,7 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog';
 
@@ -53,6 +54,9 @@ export function CreateSprintDialog({ open, onOpenChange, projectId, boardId }: C
       <DialogContent className="sm:max-w-[425px]">
         <DialogHeader>
           <DialogTitle>Nova Sprint</DialogTitle>
+          <DialogDescription>
+            Crie uma nova sprint para organizar e planejar o trabalho da equipe.
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit}>
           <div className="grid gap-4 py-4">

@@ -1,8 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
-
-const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
+import { apiFetch } from '@/lib/api';
 
 export interface ProjectInvite {
   id: string;
@@ -34,33 +32,7 @@ export function useProjectInvites(projectId: string | undefined) {
     queryFn: async () => {
       if (!projectId) return { invites: [] };
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      // Buscar convites diretamente via Supabase (respeitando RLS)
-      const { data, error } = await supabase
-        .from('project_invites')
-        .select(`
-          id,
-          project_id,
-          email,
-          role,
-          token,
-          expires_at,
-          accepted_at,
-          created_at,
-          invited_by
-        `)
-        .eq('project_id', projectId)
-        .is('accepted_at', null)
-        .gt('expires_at', new Date().toISOString())
-        .order('created_at', { ascending: false });
-
-      if (error) {
-        throw new Error(error.message || 'Failed to fetch invites');
-      }
-
-      return { invites: (data || []) as ProjectInvite[] };
+      return await apiFetch<{ invites: ProjectInvite[] }>(`/functions/v1/project-invites?projectId=${projectId}`);
     },
     enabled: !!projectId,
   });
@@ -74,28 +46,14 @@ export function useCreateInvite() {
 
   return useMutation({
     mutationFn: async (input: CreateInviteInput) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/project-invites`, {
+      return await apiFetch<{ invite: ProjectInvite }>('/functions/v1/project-invites', {
         method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
+        body: {
           projectId: input.projectId,
           email: input.email,
           role: input.role || 'developer',
-        }),
+        },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to create invite');
-      }
-
-      return await response.json() as { invite: ProjectInvite };
     },
     onSuccess: (data, variables) => {
       queryClient.invalidateQueries({ queryKey: ['project-invites', variables.projectId] });
@@ -115,27 +73,14 @@ export function useAcceptInvite() {
 
   return useMutation({
     mutationFn: async (token: string) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      
-      const headers: HeadersInit = {
-        'Content-Type': 'application/json',
-      };
-
-      if (session) {
-        headers['Authorization'] = `Bearer ${session.access_token}`;
-      }
-
-      const response = await fetch(`${FUNCTIONS_URL}/project-invites/accept/${token}`, {
+      return await apiFetch<{ message: string; project_id: string; requiresAuth?: boolean }>(
+        `/functions/v1/project-invites/accept/${token}`,
+        {
         method: 'POST',
-        headers,
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to accept invite');
-      }
-
-      return await response.json() as { message: string; project_id: string; requiresAuth?: boolean };
+          // If the user is logged in, apiFetch will attach the JWT automatically.
+          // If not, it's still fine (public endpoint returns requiresAuth).
+        }
+      );
     },
     onSuccess: (data) => {
       if (data.requiresAuth) {
@@ -160,23 +105,9 @@ export function useDeleteInvite() {
 
   return useMutation({
     mutationFn: async ({ inviteId, projectId }: { inviteId: string; projectId: string }) => {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/project-invites/${inviteId}`, {
+      return await apiFetch(`/functions/v1/project-invites/${inviteId}`, {
         method: 'DELETE',
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
       });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to delete invite');
-      }
-
-      return await response.json();
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['project-invites', variables.projectId] });

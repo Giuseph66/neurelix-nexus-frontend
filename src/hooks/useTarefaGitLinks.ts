@@ -1,7 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
-
-const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
+import { apiFetch } from '@/lib/api';
 
 export interface TarefaGitLink {
   id: string;
@@ -41,22 +39,7 @@ export function useTarefaGitLinks(tarefaId: string | undefined) {
     queryFn: async () => {
       if (!tarefaId) throw new Error('Tarefa ID is required');
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
-      const response = await fetch(`${FUNCTIONS_URL}/git-links/tarefas/${tarefaId}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to fetch git links');
-      }
-
-      return await response.json();
+      return await apiFetch<TarefaGitLinksData>(`/functions/v1/git-links/tarefas/${tarefaId}`);
     },
     enabled: !!tarefaId,
   });

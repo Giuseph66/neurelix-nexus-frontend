@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogTrigger } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Textarea } from '@/components/ui/textarea';
@@ -10,7 +10,7 @@ import { useCreatePR } from '@/hooks/usePRs';
 import { useBranches } from '@/hooks/useRepos';
 import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
+import { apiFetch } from '@/lib/api';
 
 interface CreatePRDialogProps {
   repoId: string;
@@ -34,34 +34,17 @@ export function CreatePRDialog({ repoId, projectId, defaultHead, defaultBase = '
   const createPR = useCreatePR();
   const navigate = useNavigate();
 
-  const FUNCTIONS_URL = `${import.meta.env.VITE_SUPABASE_URL}/functions/v1`;
-
   // Buscar commits quando head e base forem selecionados
   const { data: compareData, isLoading: isLoadingCommits } = useQuery({
     queryKey: ['compare-branches', repoId, base, head],
     queryFn: async () => {
       if (!repoId || !base || !head || base === head) return null;
 
-      const { data: { session } } = await supabase.auth.getSession();
-      if (!session) throw new Error('Not authenticated');
-
       const params = new URLSearchParams();
       params.append('base', base);
       params.append('head', head);
 
-      const response = await fetch(`${FUNCTIONS_URL}/github-code/repos/${repoId}/compare?${params.toString()}`, {
-        headers: {
-          'Authorization': `Bearer ${session.access_token}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || 'Failed to compare branches');
-      }
-
-      return await response.json();
+      return await apiFetch(`/functions/v1/github-code/repos/${repoId}/compare?${params.toString()}`);
     },
     enabled: !!repoId && !!base && !!head && base !== head,
   });
@@ -149,6 +132,9 @@ export function CreatePRDialog({ repoId, projectId, defaultHead, defaultBase = '
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Criar Pull Request</DialogTitle>
+          <DialogDescription>
+            Selecione as branches e preencha os detalhes para criar uma nova proposta de alteração.
+          </DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">

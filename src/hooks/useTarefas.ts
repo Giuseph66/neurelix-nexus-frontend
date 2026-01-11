@@ -1,7 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { supabase } from '@/integrations/supabase/client';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from 'sonner';
+import { apiFetch } from '@/lib/api';
 import type {
   Board,
   Tarefa,
@@ -24,14 +24,8 @@ export function useBoards(projectId: string | undefined) {
     queryKey: ['boards', projectId],
     queryFn: async () => {
       if (!projectId) return [];
-      const { data, error } = await supabase
-        .from('boards')
-        .select('*')
-        .eq('project_id', projectId)
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      return data as Board[];
+      const data = await apiFetch<Board[]>(`/boards?projectId=${projectId}`, { auth: true });
+      return data;
     },
     enabled: !!projectId,
   });
@@ -43,79 +37,8 @@ export function useBoardView(boardId: string | undefined) {
     queryKey: ['board-view', boardId],
     queryFn: async (): Promise<BoardView | null> => {
       if (!boardId) return null;
-
-      // Fetch board
-      const { data: board, error: boardError } = await supabase
-        .from('boards')
-        .select('*')
-        .eq('id', boardId)
-        .single();
-      
-      if (boardError) throw boardError;
-
-      // Fetch workflow
-      const { data: workflows, error: workflowError } = await supabase
-        .from('workflows')
-        .select('*')
-        .eq('board_id', boardId)
-        .eq('is_default', true)
-        .limit(1);
-      
-      if (workflowError) throw workflowError;
-      const workflow = workflows?.[0];
-      if (!workflow) throw new Error('No workflow found for board');
-
-      // Fetch statuses
-      const { data: statuses, error: statusError } = await supabase
-        .from('workflow_statuses')
-        .select('*')
-        .eq('workflow_id', workflow.id)
-        .order('position');
-      
-      if (statusError) throw statusError;
-
-      // Fetch transitions
-      const { data: transitions, error: transError } = await supabase
-        .from('workflow_transitions')
-        .select('*')
-        .eq('workflow_id', workflow.id);
-      
-      if (transError) throw transError;
-
-      // Fetch tarefas for board
-      const { data: tarefas, error: tarefasError } = await supabase
-        .from('tarefas')
-        .select('*')
-        .eq('board_id', boardId)
-        .order('backlog_position', { ascending: true, nullsFirst: false });
-      
-      if (tarefasError) throw tarefasError;
-
-      // Build columns
-      const columns: BoardColumn[] = (statuses as WorkflowStatus[]).map(status => {
-        const statusTransitions = (transitions as WorkflowTransition[])
-          .filter(t => t.from_status_id === status.id)
-          .map(t => t.to_status_id);
-        
-        const columnTarefas = (tarefas || [])
-          .filter(t => t.status_id === status.id)
-          .map(t => ({
-            ...t,
-            status,
-          }));
-
-        return {
-          status,
-          tarefas: columnTarefas as Tarefa[],
-          allowedTransitions: statusTransitions,
-        };
-      });
-
-      return {
-        board: board as Board,
-        workflow: workflow as Workflow,
-        columns,
-      };
+      const data = await apiFetch<BoardView>(`/board-views/${boardId}`, { auth: true });
+      return data;
     },
     enabled: !!boardId,
   });
@@ -127,27 +50,8 @@ export function useTarefa(tarefaId: string | undefined) {
     queryKey: ['tarefa', tarefaId],
     queryFn: async () => {
       if (!tarefaId) return null;
-
-      const { data, error } = await supabase
-        .from('tarefas')
-        .select('*')
-        .eq('id', tarefaId)
-        .single();
-      
-      if (error) throw error;
-      
-      // Fetch status separately
-      let status = null;
-      if (data.status_id) {
-        const { data: statusData } = await supabase
-          .from('workflow_statuses')
-          .select('*')
-          .eq('id', data.status_id)
-          .single();
-        status = statusData;
-      }
-
-      return { ...data, status } as Tarefa;
+      const data = await apiFetch<Tarefa>(`/tarefas/${tarefaId}`, { auth: true });
+      return data;
     },
     enabled: !!tarefaId,
   });
@@ -159,16 +63,8 @@ export function useTarefaComments(tarefaId: string | undefined) {
     queryKey: ['tarefa-comments', tarefaId],
     queryFn: async () => {
       if (!tarefaId) return [];
-
-      const { data, error } = await supabase
-        .from('tarefa_comments')
-        .select('*')
-        .eq('tarefa_id', tarefaId)
-        .order('created_at', { ascending: true });
-      
-      if (error) throw error;
-      
-      return data as TarefaComment[];
+      const data = await apiFetch<TarefaComment[]>(`/tarefas/${tarefaId}/comments`, { auth: true });
+      return data;
     },
     enabled: !!tarefaId,
   });
@@ -180,16 +76,8 @@ export function useTarefaActivity(tarefaId: string | undefined) {
     queryKey: ['tarefa-activity', tarefaId],
     queryFn: async () => {
       if (!tarefaId) return [];
-
-      const { data, error } = await supabase
-        .from('tarefa_activity_log')
-        .select('*')
-        .eq('tarefa_id', tarefaId)
-        .order('created_at', { ascending: false });
-      
-      if (error) throw error;
-      
-      return data as TarefaActivityLog[];
+      const data = await apiFetch<TarefaActivityLog[]>(`/tarefas/${tarefaId}/activity`, { auth: true });
+      return data;
     },
     enabled: !!tarefaId,
   });
@@ -198,40 +86,27 @@ export function useTarefaActivity(tarefaId: string | undefined) {
 // Create board mutation
 export function useCreateBoard() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async (input: CreateBoardInput) => {
-      // Create board
-      const { data: board, error: boardError } = await supabase
-        .from('boards')
-        .insert({
+      const board = await apiFetch<Board>('/boards', {
+        method: 'POST',
+        body: {
           project_id: input.project_id,
           name: input.name,
           description: input.description,
           type: input.type || 'KANBAN',
-          created_by: user?.id,
-        })
-        .select()
-        .single();
-      
-      if (boardError) throw boardError;
-
-      // Create default workflow
-      const { error: workflowError } = await supabase.rpc('create_default_workflow', {
-        p_board_id: board.id,
+        },
+        auth: true,
       });
-
-      if (workflowError) throw workflowError;
-
-      return board as Board;
+      return board;
     },
     onSuccess: (board) => {
       queryClient.invalidateQueries({ queryKey: ['boards', board.project_id] });
       toast.success('Board criado com sucesso!');
     },
     onError: (error) => {
-      toast.error('Erro ao criar board: ' + error.message);
+      toast.error('Erro ao criar board: ' + (error instanceof Error ? error.message : 'Erro desconhecido'));
     },
   });
 }
@@ -239,72 +114,28 @@ export function useCreateBoard() {
 // Create tarefa mutation
 export function useCreateTarefa() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async (input: CreateTarefaInput) => {
-      // Generate key
-      const { data: key, error: keyError } = await supabase.rpc('generate_tarefa_key', {
-        p_project_id: input.project_id,
-      });
-
-      if (keyError) throw keyError;
-
-      // Get initial status if board is provided
-      let statusId: string | undefined;
-      if (input.board_id) {
-        const { data: workflows } = await supabase
-          .from('workflows')
-          .select('id')
-          .eq('board_id', input.board_id)
-          .eq('is_default', true)
-          .limit(1);
-
-        if (workflows?.[0]) {
-          const { data: statuses } = await supabase
-            .from('workflow_statuses')
-            .select('id')
-            .eq('workflow_id', workflows[0].id)
-            .eq('is_initial', true)
-            .limit(1);
-          
-          statusId = statuses?.[0]?.id;
-        }
-      }
-
-      const { data, error } = await supabase
-        .from('tarefas')
-        .insert({
+      const tarefa = await apiFetch<Tarefa>('/tarefas', {
+        method: 'POST',
+        body: {
           project_id: input.project_id,
           board_id: input.board_id,
-          key,
           type: input.type || 'TASK',
           title: input.title,
           description: input.description,
-          status_id: statusId,
           priority: input.priority || 'MEDIUM',
           assignee_id: input.assignee_id,
-          reporter_id: user?.id,
           epic_id: input.epic_id,
           sprint_id: input.sprint_id,
           labels: input.labels || [],
           due_date: input.due_date,
           estimated_hours: input.estimated_hours,
-        })
-        .select()
-        .single();
-      
-      if (error) throw error;
-
-      // Log activity
-      await supabase.from('tarefa_activity_log').insert({
-        tarefa_id: data.id,
-        user_id: user?.id,
-        action: 'created',
-        new_value: input.title,
+        },
+        auth: true,
       });
-
-      return data as Tarefa;
+      return tarefa;
     },
     onSuccess: (tarefa) => {
       queryClient.invalidateQueries({ queryKey: ['board-view', tarefa.board_id] });
@@ -312,7 +143,7 @@ export function useCreateTarefa() {
       toast.success(`Tarefa ${tarefa.key} criada!`);
     },
     onError: (error) => {
-      toast.error('Erro ao criar tarefa: ' + error.message);
+      toast.error('Erro ao criar tarefa: ' + (error instanceof Error ? error.message : 'Erro desconhecido'));
     },
   });
 }
@@ -320,50 +151,15 @@ export function useCreateTarefa() {
 // Update tarefa mutation
 export function useUpdateTarefa() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async ({ tarefaId, input }: { tarefaId: string; input: UpdateTarefaInput }) => {
-      // Get old values for activity log
-      const { data: oldTarefa } = await supabase
-        .from('tarefas')
-        .select('*')
-        .eq('id', tarefaId)
-        .single();
-
-      const { data, error } = await supabase
-        .from('tarefas')
-        .update(input)
-        .eq('id', tarefaId)
-        .select()
-        .single();
-      
-      if (error) throw error;
-
-      // Log changes
-      const changes: { field: string; old: string | null; new: string | null }[] = [];
-      if (input.title !== undefined && input.title !== oldTarefa?.title) {
-        changes.push({ field: 'title', old: oldTarefa?.title, new: input.title });
-      }
-      if (input.priority !== undefined && input.priority !== oldTarefa?.priority) {
-        changes.push({ field: 'priority', old: oldTarefa?.priority, new: input.priority });
-      }
-      if (input.assignee_id !== undefined && input.assignee_id !== oldTarefa?.assignee_id) {
-        changes.push({ field: 'assignee', old: oldTarefa?.assignee_id, new: input.assignee_id });
-      }
-
-      for (const change of changes) {
-        await supabase.from('tarefa_activity_log').insert({
-          tarefa_id: tarefaId,
-          user_id: user?.id,
-          action: 'updated',
-          field_name: change.field,
-          old_value: change.old,
-          new_value: change.new,
+      const tarefa = await apiFetch<Tarefa>(`/tarefas/${tarefaId}`, {
+        method: 'PUT',
+        body: input,
+        auth: true,
         });
-      }
-
-      return data as Tarefa;
+      return tarefa;
     },
     onSuccess: (tarefa) => {
       queryClient.invalidateQueries({ queryKey: ['tarefa', tarefa.id] });
@@ -371,7 +167,7 @@ export function useUpdateTarefa() {
       toast.success('Tarefa atualizada!');
     },
     onError: (error) => {
-      toast.error('Erro ao atualizar tarefa: ' + error.message);
+      toast.error('Erro ao atualizar tarefa: ' + (error instanceof Error ? error.message : 'Erro desconhecido'));
     },
   });
 }
@@ -379,47 +175,15 @@ export function useUpdateTarefa() {
 // Move tarefa to any status (free navigation) - with optimistic update
 export function useMoveTarefa() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async ({ tarefaId, toStatusId, boardId }: { tarefaId: string; toStatusId: string; boardId?: string }) => {
-      // Get current tarefa with status
-      const { data: tarefa, error: tarefaError } = await supabase
-        .from('tarefas')
-        .select('*, status:workflow_statuses(*)')
-        .eq('id', tarefaId)
-        .single();
-      
-      if (tarefaError) throw tarefaError;
-
-      // Get new status name for logging
-      const { data: newStatus } = await supabase
-        .from('workflow_statuses')
-        .select('name')
-        .eq('id', toStatusId)
-        .single();
-
-      // Update status
-      const { data, error } = await supabase
-        .from('tarefas')
-        .update({ status_id: toStatusId })
-        .eq('id', tarefaId)
-        .select()
-        .single();
-      
-      if (error) throw error;
-
-      // Log activity
-      await supabase.from('tarefa_activity_log').insert({
-        tarefa_id: tarefaId,
-        user_id: user?.id,
-        action: 'moved',
-        field_name: 'status',
-        old_value: tarefa.status?.name,
-        new_value: newStatus?.name,
+      const tarefa = await apiFetch<Tarefa>(`/tarefas/${tarefaId}`, {
+        method: 'PUT',
+        body: { status_id: toStatusId },
+        auth: true,
       });
-
-      return data as Tarefa;
+      return tarefa;
     },
     onMutate: async ({ tarefaId, toStatusId, boardId }) => {
       // Cancel any outgoing refetches
@@ -476,70 +240,16 @@ export function useMoveTarefa() {
 // Transition tarefa (change status with validation) - kept for backward compatibility
 export function useTransitionTarefa() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async ({ tarefaId, toStatusId }: { tarefaId: string; toStatusId: string }) => {
-      // Get current tarefa
-      const { data: tarefa, error: tarefaError } = await supabase
-        .from('tarefas')
-        .select('*, status:workflow_statuses(*)')
-        .eq('id', tarefaId)
-        .single();
-      
-      if (tarefaError) throw tarefaError;
-      if (!tarefa.status_id) throw new Error('Tarefa não tem status atual');
-
-      // Get workflow from status
-      const { data: workflow } = await supabase
-        .from('workflow_statuses')
-        .select('workflow_id')
-        .eq('id', tarefa.status_id)
-        .single();
-
-      if (!workflow) throw new Error('Workflow não encontrado');
-
-      // Validate transition
-      const { data: transition, error: transError } = await supabase
-        .from('workflow_transitions')
-        .select('*')
-        .eq('workflow_id', workflow.workflow_id)
-        .eq('from_status_id', tarefa.status_id)
-        .eq('to_status_id', toStatusId)
-        .single();
-      
-      if (transError || !transition) {
-        throw new Error('Transição não permitida neste workflow');
-      }
-
-      // Get new status name for logging
-      const { data: newStatus } = await supabase
-        .from('workflow_statuses')
-        .select('name')
-        .eq('id', toStatusId)
-        .single();
-
-      // Update status
-      const { data, error } = await supabase
-        .from('tarefas')
-        .update({ status_id: toStatusId })
-        .eq('id', tarefaId)
-        .select()
-        .single();
-      
-      if (error) throw error;
-
-      // Log activity
-      await supabase.from('tarefa_activity_log').insert({
-        tarefa_id: tarefaId,
-        user_id: user?.id,
-        action: 'transitioned',
-        field_name: 'status',
-        old_value: tarefa.status?.name,
-        new_value: newStatus?.name,
+      // For now, just move the tarefa (backend doesn't validate transitions yet)
+      const tarefa = await apiFetch<Tarefa>(`/tarefas/${tarefaId}`, {
+        method: 'PUT',
+        body: { status_id: toStatusId },
+        auth: true,
       });
-
-      return data as Tarefa;
+      return tarefa;
     },
     onSuccess: (tarefa) => {
       queryClient.invalidateQueries({ queryKey: ['tarefa', tarefa.id] });
@@ -547,7 +257,7 @@ export function useTransitionTarefa() {
       toast.success('Status atualizado!');
     },
     onError: (error) => {
-      toast.error(error.message);
+      toast.error(error instanceof Error ? error.message : 'Erro desconhecido');
     },
   });
 }
@@ -563,34 +273,12 @@ export function useCreateWorkflowStatus() {
       color?: string;
       position?: number;
     }) => {
-      // Get max position if not provided
-      let finalPosition = position;
-      if (finalPosition === undefined) {
-        const { data: statuses } = await supabase
-          .from('workflow_statuses')
-          .select('position')
-          .eq('workflow_id', workflowId)
-          .order('position', { ascending: false })
-          .limit(1);
-        
-        finalPosition = (statuses?.[0]?.position ?? 0) + 1;
-      }
-
-      const { data, error } = await supabase
-        .from('workflow_statuses')
-        .insert({
-          workflow_id: workflowId,
-          name,
-          color: color || '#6b7280',
-          position: finalPosition,
-          is_initial: false,
-          is_final: false,
-        })
-        .select()
-        .single();
-      
-      if (error) throw error;
-      return data;
+      const status = await apiFetch(`/workflows/${workflowId}/statuses`, {
+        method: 'POST',
+        body: { name, color, position },
+        auth: true,
+      });
+      return status;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['board-view'] });
@@ -607,24 +295,18 @@ export function useUpdateWorkflowStatus() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ statusId, name, color }: { 
+    mutationFn: async ({ workflowId, statusId, name, color }: { 
+      workflowId: string;
       statusId: string; 
       name?: string; 
       color?: string;
     }) => {
-      const updates: Record<string, string> = {};
-      if (name !== undefined) updates.name = name;
-      if (color !== undefined) updates.color = color;
-
-      const { data, error } = await supabase
-        .from('workflow_statuses')
-        .update(updates)
-        .eq('id', statusId)
-        .select()
-        .single();
-      
-      if (error) throw error;
-      return data;
+      const status = await apiFetch(`/workflows/${workflowId}/statuses/${statusId}`, {
+        method: 'PUT',
+        body: { name, color },
+        auth: true,
+      });
+      return status;
     },
     onMutate: async ({ statusId, name, color }) => {
       // Cancel refetches
@@ -678,30 +360,11 @@ export function useDeleteWorkflowStatus() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (statusId: string) => {
-      // Check if there are tarefas in this status
-      const { data: tarefas } = await supabase
-        .from('tarefas')
-        .select('id')
-        .eq('status_id', statusId)
-        .limit(1);
-      
-      if (tarefas && tarefas.length > 0) {
-        throw new Error('Não é possível excluir uma coluna com tarefas. Mova as tarefas primeiro.');
-      }
-
-      // Delete transitions involving this status
-      await supabase
-        .from('workflow_transitions')
-        .delete()
-        .or(`from_status_id.eq.${statusId},to_status_id.eq.${statusId}`);
-
-      const { error } = await supabase
-        .from('workflow_statuses')
-        .delete()
-        .eq('id', statusId);
-      
-      if (error) throw error;
+    mutationFn: async ({ workflowId, statusId }: { workflowId: string; statusId: string }) => {
+      await apiFetch(`/workflows/${workflowId}/statuses/${statusId}`, {
+        method: 'DELETE',
+        auth: true,
+      });
       return statusId;
     },
     onMutate: async (statusId) => {
@@ -737,33 +400,40 @@ export function useDeleteWorkflowStatus() {
   });
 }
 
+// Reorder workflow statuses (columns)
+export function useReorderWorkflowStatuses() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ workflowId, orderedStatusIds }: { workflowId: string; orderedStatusIds: string[] }) => {
+      return await apiFetch<{ ok: true }>(`/workflows/${workflowId}/statuses/reorder`, {
+        method: 'POST',
+        body: { orderedStatusIds },
+        auth: true,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['board-view'] });
+      toast.success('Colunas reordenadas!');
+    },
+    onError: (error) => {
+      toast.error('Erro ao mover colunas: ' + (error instanceof Error ? error.message : 'Erro desconhecido'));
+    },
+  });
+}
+
 // Create comment mutation
 export function useCreateComment() {
   const queryClient = useQueryClient();
-  const { user } = useAuth();
 
   return useMutation({
     mutationFn: async ({ tarefaId, input }: { tarefaId: string; input: CreateCommentInput }) => {
-      const { data, error } = await supabase
-        .from('tarefa_comments')
-        .insert({
-          tarefa_id: tarefaId,
-          content: input.content,
-          created_by: user?.id,
-        })
-        .select()
-        .single();
-      
-      if (error) throw error;
-
-      // Log activity
-      await supabase.from('tarefa_activity_log').insert({
-        tarefa_id: tarefaId,
-        user_id: user?.id,
-        action: 'commented',
+      const comment = await apiFetch<TarefaComment>(`/tarefas/${tarefaId}/comments`, {
+        method: 'POST',
+        body: { content: input.content },
+        auth: true,
       });
-
-      return data as TarefaComment;
+      return comment;
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['tarefa-comments', variables.tarefaId] });
@@ -782,18 +452,12 @@ export function useDeleteTarefa() {
 
   return useMutation({
     mutationFn: async (tarefaId: string) => {
-      const { data: tarefa } = await supabase
-        .from('tarefas')
-        .select('board_id, project_id')
-        .eq('id', tarefaId)
-        .single();
-
-      const { error } = await supabase
-        .from('tarefas')
-        .delete()
-        .eq('id', tarefaId);
-      
-      if (error) throw error;
+      // Get tarefa info before deleting
+      const tarefa = await apiFetch<Tarefa>(`/tarefas/${tarefaId}`, { auth: true });
+      await apiFetch(`/tarefas/${tarefaId}`, {
+        method: 'DELETE',
+        auth: true,
+      });
       return tarefa;
     },
     onSuccess: (tarefa) => {
