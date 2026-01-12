@@ -65,6 +65,7 @@
     "tailwindcss-animate": "^1.0.7",
     "tldraw": "^2.4.6",
     "vaul": "^0.9.9",
+    "vercel": "^50.1.6",
     "zod": "^3.25.76"
   },
   "devDependencies": {

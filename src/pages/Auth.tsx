@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -234,6 +234,16 @@ export default function Auth() {
                 "ENTRAR"
               )}
             </Button>
+
+            <div className="pt-2 text-center">
+              <Link
+                to="/auth/signup"
+                className="text-[11px] font-black uppercase tracking-[0.25em] text-white/30 hover:text-white transition-colors inline-flex items-center gap-2"
+              >
+                Criar usuário
+                <ChevronRight className="h-4 w-4" />
+              </Link>
+            </div>
           </form>
           
           <div className="pt-8 mt-12 border-t border-white/5 flex flex-col items-center">

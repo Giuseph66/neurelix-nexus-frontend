@@ -7,6 +7,7 @@ import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "next-themes";
 
 import Auth from "./pages/Auth";
+import CreateUser from "./pages/CreateUser";
 import AcceptInvite from "./pages/AcceptInvite";
 import Projects from "./pages/Projects";
 import { ProjectLayout } from "./components/layout/ProjectLayout";
@@ -32,6 +33,7 @@ const App = () => (
             <Routes>
               <Route path="/" element={<Navigate to="/projects" replace />} />
               <Route path="/auth" element={<Auth />} />
+              <Route path="/auth/signup" element={<CreateUser />} />
               <Route path="/auth/accept-invite" element={<AcceptInvite />} />
               <Route path="/projects" element={<Projects />} />
 
