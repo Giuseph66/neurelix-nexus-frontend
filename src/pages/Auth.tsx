@@ -234,7 +234,7 @@ export default function Auth() {
                 "ENTRAR"
               )}
             </Button>
-
+{/*
             <div className="pt-2 text-center">
               <Link
                 to="/auth/signup"
@@ -244,6 +244,7 @@ export default function Auth() {
                 <ChevronRight className="h-4 w-4" />
               </Link>
             </div>
+              */}
           </form>
           
           <div className="pt-8 mt-12 border-t border-white/5 flex flex-col items-center">
