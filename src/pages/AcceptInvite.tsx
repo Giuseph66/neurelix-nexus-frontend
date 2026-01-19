@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useSearchParams, useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiFetch } from '@/lib/api';
@@ -28,14 +28,23 @@ export default function AcceptInvite() {
   const [error, setError] = useState<string | null>(null);
   const [inviteEmail, setInviteEmail] = useState<string | null>(null);
   const [showPassword, setShowPassword] = useState(false);
+  
+  // Refs para evitar múltiplas execuções e conflitos com extensões
+  const hasRedirectedRef = useRef(false);
+  const isProcessingRef = useRef(false);
+  const inviteInfoFetchedRef = useRef(false);
 
   usePageTitle('Aceitar Convite - NEURELIX NEXUS');
 
   // Buscar informações do convite (especialmente o email) para exibir como label
   useEffect(() => {
-    if (!token) return;
+    if (!token || inviteInfoFetchedRef.current) return;
 
     const fetchInviteInfo = async () => {
+      if (isProcessingRef.current) return;
+      isProcessingRef.current = true;
+      inviteInfoFetchedRef.current = true;
+
       try {
         // Usa o endpoint público (sem auth) para obter infos do convite
         const res = await apiFetch<{ invite?: { email: string; expires_at: string; accepted_at: string | null }; requiresAuth?: boolean }>(
@@ -66,6 +75,8 @@ export default function AcceptInvite() {
         } else {
           setError('Convite inválido ou expirado. Entre em contato com quem te convidou.');
         }
+      } finally {
+        isProcessingRef.current = false;
       }
     };
 
@@ -76,31 +87,61 @@ export default function AcceptInvite() {
   }, [token, user]);
 
   useEffect(() => {
-    if (token && user) {
+    if (token && user && !hasRedirectedRef.current && !isProcessingRef.current) {
       // Se usuário já está logado, tentar aceitar o convite
       handleAcceptInvite();
     }
   }, [token, user]);
 
   const handleAcceptInvite = async () => {
+    if (!token || hasRedirectedRef.current || isProcessingRef.current) {
+      return;
+    }
+
     if (!token) {
       setError('Token de convite não encontrado');
       return;
     }
 
-    acceptInviteMutation.mutate(token, {
-      onSuccess: (data) => {
-        if (data.requiresAuth) {
-          // Precisa estar logado (ou o token não foi enviado)
-          setError('Faça login para aceitar o convite.');
-          return;
-        }
-        // Redirecionar para o projeto
-        setTimeout(() => {
-          navigate(`/project/${data.project_id}`);
-        }, 1500);
-      },
-    });
+    isProcessingRef.current = true;
+
+    try {
+      acceptInviteMutation.mutate(token, {
+        onSuccess: (data) => {
+          if (data.requiresAuth) {
+            // Precisa estar logado (ou o token não foi enviado)
+            setError('Faça login para aceitar o convite.');
+            isProcessingRef.current = false;
+            return;
+          }
+          
+          // Marcar como redirecionado antes de navegar
+          hasRedirectedRef.current = true;
+          
+          // Redirecionar para o projeto usando replace para evitar histórico duplicado
+          // Usar window.location para evitar conflitos com extensões
+          const redirectPath = `/project/${data.project_id}`;
+          
+          // Pequeno delay para garantir que o estado está estável
+          setTimeout(() => {
+            try {
+              // Tentar usar navigate primeiro, mas com replace
+              navigate(redirectPath, { replace: true });
+            } catch (err) {
+              // Fallback para window.location se houver erro
+              console.warn('Erro ao navegar, usando window.location:', err);
+              window.location.href = redirectPath;
+            }
+          }, 1000);
+        },
+        onError: () => {
+          isProcessingRef.current = false;
+        },
+      });
+    } catch (err) {
+      console.error('Erro ao aceitar convite:', err);
+      isProcessingRef.current = false;
+    }
   };
 
   const handleSignIn = async (e: React.FormEvent) => {
@@ -165,7 +206,16 @@ export default function AcceptInvite() {
             <p className="text-gray-500 text-base lg:text-lg mb-8 leading-relaxed font-medium">
               {error}
             </p>
-            <Button onClick={() => navigate('/auth')} className="w-full h-14 text-lg font-bold rounded-2xl bg-white text-black hover:bg-white/90 transition-all active:scale-[0.98]">
+            <Button 
+              onClick={() => {
+                try {
+                  navigate('/auth', { replace: true });
+                } catch (err) {
+                  window.location.href = '/auth';
+                }
+              }} 
+              className="w-full h-14 text-lg font-bold rounded-2xl bg-white text-black hover:bg-white/90 transition-all active:scale-[0.98]"
+            >
               IR PARA LOGIN
             </Button>
           </div>
@@ -189,7 +239,16 @@ export default function AcceptInvite() {
             <p className="text-gray-500 text-base lg:text-lg mb-8 leading-relaxed font-medium">
               Infelizmente este protocolo de convite não é mais válido ou já expirou.
             </p>
-            <Button onClick={() => navigate('/auth')} className="w-full h-14 text-lg font-bold rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-all active:scale-[0.98]">
+            <Button 
+              onClick={() => {
+                try {
+                  navigate('/auth', { replace: true });
+                } catch (err) {
+                  window.location.href = '/auth';
+                }
+              }} 
+              className="w-full h-14 text-lg font-bold rounded-2xl bg-white/10 hover:bg-white/20 text-white transition-all active:scale-[0.98]"
+            >
               VOLTAR
             </Button>
           </div>
@@ -197,6 +256,24 @@ export default function AcceptInvite() {
       </div>
     );
   }
+
+  // Redirecionar imediatamente se já foi aceito
+  useEffect(() => {
+    if (user && acceptedProjectId && !hasRedirectedRef.current) {
+      hasRedirectedRef.current = true;
+      const redirectPath = `/project/${acceptedProjectId}`;
+      
+      // Usar replace para evitar histórico duplicado
+      setTimeout(() => {
+        try {
+          navigate(redirectPath, { replace: true });
+        } catch (err) {
+          console.warn('Erro ao navegar, usando window.location:', err);
+          window.location.href = redirectPath;
+        }
+      }, 500);
+    }
+  }, [user, acceptedProjectId, navigate]);
 
   if (user && acceptedProjectId) {
     return (
@@ -248,7 +325,13 @@ export default function AcceptInvite() {
               )}
               
               <Button
-                onClick={() => navigate('/auth')}
+                onClick={() => {
+                  try {
+                    navigate('/auth', { replace: true });
+                  } catch (err) {
+                    window.location.href = '/auth';
+                  }
+                }}
                 className="w-full h-14 text-lg font-black rounded-2xl transition-all active:scale-[0.98] bg-white text-black hover:bg-white/90 shadow-lg shadow-white/5"
               >
                 IR PARA LOGIN

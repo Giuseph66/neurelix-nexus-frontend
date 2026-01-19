@@ -20,8 +20,10 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 import { useToast } from "@/hooks/use-toast";
-import { Loader2, Trash2 } from "lucide-react";
+import { Loader2, Trash2, Settings as SettingsIcon, Key, AlertTriangle } from "lucide-react";
 import { usePageTitle } from "@/hooks/usePageTitle";
+import { ApiKeysCard } from "@/components/settings/ApiKeysCard";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
 type AppRole = "admin" | "tech_lead" | "developer" | "viewer";
 
@@ -34,6 +36,7 @@ export default function Settings() {
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [activeTab, setActiveTab] = useState("general");
 
   const { data: currentUserRole } = useQuery({
     queryKey: ["project-role", projectId],
@@ -123,7 +126,7 @@ export default function Settings() {
   }
 
   return (
-    <div className="p-6 space-y-6 max-w-2xl">
+    <div className="p-6 space-y-6 max-w-4xl">
       <div>
         <h1 className="text-2xl font-bold">Configurações</h1>
         <p className="text-muted-foreground">
@@ -131,95 +134,125 @@ export default function Settings() {
         </p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Informações do projeto</CardTitle>
-          <CardDescription>Dados básicos do projeto</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSave} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="name">Nome do projeto</Label>
-              <Input
-                id="name"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                disabled={!canEdit || updateProjectMutation.isPending}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="description">Descrição</Label>
-              <Textarea
-                id="description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                disabled={!canEdit || updateProjectMutation.isPending}
-                rows={3}
-              />
-            </div>
-            <div className="space-y-2">
-              <Label>Slug</Label>
-              <Input value={project?.slug || ""} disabled />
-              <p className="text-xs text-muted-foreground">
-                O slug não pode ser alterado
-              </p>
-            </div>
-            {canEdit && (
-              <Button
-                type="submit"
-                disabled={updateProjectMutation.isPending || !name.trim()}
-              >
-                {updateProjectMutation.isPending && (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                )}
-                Salvar alterações
-              </Button>
-            )}
-          </form>
-        </CardContent>
-      </Card>
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <TabsList className="grid w-full grid-cols-3">
+          <TabsTrigger value="general" className="flex items-center gap-2">
+            <SettingsIcon className="h-4 w-4" />
+            Geral
+          </TabsTrigger>
+          <TabsTrigger value="api-keys" className="flex items-center gap-2">
+            <Key className="h-4 w-4" />
+            Chaves de API
+          </TabsTrigger>
+          {canDelete && (
+            <TabsTrigger value="danger" className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4" />
+              Zona de Perigo
+            </TabsTrigger>
+          )}
+        </TabsList>
 
-      {canDelete && (
-        <Card className="border-destructive/50">
-          <CardHeader>
-            <CardTitle className="text-base text-destructive">Zona de perigo</CardTitle>
-            <CardDescription>
-              Ações irreversíveis para o projeto
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <AlertDialog>
-              <AlertDialogTrigger asChild>
-                <Button variant="destructive">
-                  <Trash2 className="mr-2 h-4 w-4" />
-                  Excluir projeto
-                </Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Tem certeza?</AlertDialogTitle>
-                  <AlertDialogDescription>
-                    Esta ação não pode ser desfeita. Isso excluirá permanentemente o
-                    projeto "{project?.name}" e todos os dados associados.
-                  </AlertDialogDescription>
-                </AlertDialogHeader>
-                <AlertDialogFooter>
-                  <AlertDialogCancel>Cancelar</AlertDialogCancel>
-                  <AlertDialogAction
-                    onClick={() => deleteProjectMutation.mutate()}
-                    className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+        <TabsContent value="general" className="space-y-4 mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Informações do projeto</CardTitle>
+              <CardDescription>Dados básicos do projeto</CardDescription>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={handleSave} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="name">Nome do projeto</Label>
+                  <Input
+                    id="name"
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    disabled={!canEdit || updateProjectMutation.isPending}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="description">Descrição</Label>
+                  <Textarea
+                    id="description"
+                    value={description}
+                    onChange={(e) => setDescription(e.target.value)}
+                    disabled={!canEdit || updateProjectMutation.isPending}
+                    rows={3}
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label>Slug</Label>
+                  <Input value={project?.slug || ""} disabled />
+                  <p className="text-xs text-muted-foreground">
+                    O slug não pode ser alterado
+                  </p>
+                </div>
+                {canEdit && (
+                  <Button
+                    type="submit"
+                    disabled={updateProjectMutation.isPending || !name.trim()}
                   >
-                    {deleteProjectMutation.isPending && (
+                    {updateProjectMutation.isPending && (
                       <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                     )}
-                    Excluir
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </CardContent>
-        </Card>
-      )}
+                    Salvar alterações
+                  </Button>
+                )}
+              </form>
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        <TabsContent value="api-keys" className="mt-6">
+          <ApiKeysCard projectId={projectId!} />
+        </TabsContent>
+
+        {canDelete && (
+          <TabsContent value="danger" className="mt-6">
+            <Card className="border-destructive/50">
+              <CardHeader>
+                <CardTitle className="text-base text-destructive flex items-center gap-2">
+                  <AlertTriangle className="h-5 w-5" />
+                  Zona de perigo
+                </CardTitle>
+                <CardDescription>
+                  Ações irreversíveis para o projeto
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <AlertDialog>
+                  <AlertDialogTrigger asChild>
+                    <Button variant="destructive">
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Excluir projeto
+                    </Button>
+                  </AlertDialogTrigger>
+                  <AlertDialogContent>
+                    <AlertDialogHeader>
+                      <AlertDialogTitle>Tem certeza?</AlertDialogTitle>
+                      <AlertDialogDescription>
+                        Esta ação não pode ser desfeita. Isso excluirá permanentemente o
+                        projeto "{project?.name}" e todos os dados associados.
+                      </AlertDialogDescription>
+                    </AlertDialogHeader>
+                    <AlertDialogFooter>
+                      <AlertDialogCancel>Cancelar</AlertDialogCancel>
+                      <AlertDialogAction
+                        onClick={() => deleteProjectMutation.mutate()}
+                        className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                      >
+                        {deleteProjectMutation.isPending && (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        )}
+                        Excluir
+                      </AlertDialogAction>
+                    </AlertDialogFooter>
+                  </AlertDialogContent>
+                </AlertDialog>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+      </Tabs>
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { toast } from 'sonner';
 import { apiFetch } from '@/lib/api';
 import type {
   Board,
+  BoardType,
   Tarefa,
   WorkflowStatus,
   Workflow,
@@ -107,6 +108,52 @@ export function useCreateBoard() {
     },
     onError: (error) => {
       toast.error('Erro ao criar board: ' + (error instanceof Error ? error.message : 'Erro desconhecido'));
+    },
+  });
+}
+
+// Update board mutation
+export function useUpdateBoard() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ boardId, input }: { boardId: string; input: { name?: string; description?: string; type?: BoardType } }) => {
+      const board = await apiFetch<Board>(`/boards/${boardId}`, {
+        method: 'PUT',
+        body: input,
+        auth: true,
+      });
+      return board;
+    },
+    onSuccess: (board) => {
+      queryClient.invalidateQueries({ queryKey: ['boards', board.project_id] });
+      queryClient.invalidateQueries({ queryKey: ['board-view', board.id] });
+      toast.success('Board atualizado com sucesso!');
+    },
+    onError: (error) => {
+      toast.error('Erro ao atualizar board: ' + (error instanceof Error ? error.message : 'Erro desconhecido'));
+    },
+  });
+}
+
+// Delete board mutation
+export function useDeleteBoard() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({ boardId, projectId }: { boardId: string; projectId: string }) => {
+      await apiFetch(`/boards/${boardId}`, {
+        method: 'DELETE',
+        auth: true,
+      });
+      return { boardId, projectId };
+    },
+    onSuccess: ({ projectId }) => {
+      queryClient.invalidateQueries({ queryKey: ['boards', projectId] });
+      toast.success('Board deletado com sucesso!');
+    },
+    onError: (error) => {
+      toast.error('Erro ao deletar board: ' + (error instanceof Error ? error.message : 'Erro desconhecido'));
     },
   });
 }

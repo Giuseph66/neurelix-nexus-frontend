@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react';
-import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, closestCorners, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
+import { DndContext, DragEndEvent, DragOverlay, DragStartEvent, closestCenter, PointerSensor, useSensor, useSensors } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, horizontalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { useQueryClient } from '@tanstack/react-query';
 import { useBoardView, useMoveTarefa, useReorderWorkflowStatuses } from '@/hooks/useTarefas';
@@ -197,7 +197,7 @@ export function KanbanBoard({ boardId, projectId }: KanbanBoardProps) {
       <div className="flex-1 overflow-x-auto p-4">
         <DndContext
           sensors={sensors}
-          collisionDetection={closestCorners}
+          collisionDetection={closestCenter}
           onDragStart={handleDragStart}
           onDragEnd={handleDragEnd}
         >
@@ -205,7 +205,7 @@ export function KanbanBoard({ boardId, projectId }: KanbanBoardProps) {
             items={boardView.columns.map(c => `col:${c.status.id}`)}
             strategy={horizontalListSortingStrategy}
           >
-            <div className="flex gap-4 h-full">
+            <div className="flex gap-4 min-h-full">
               {filteredColumns?.map(column => (
                 <KanbanColumn
                   key={column.status.id}

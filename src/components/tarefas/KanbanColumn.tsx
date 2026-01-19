@@ -78,123 +78,126 @@ export function KanbanColumn({ status, workflowId, tarefasCount, children }: Kan
 
   return (
     <div ref={setSortableRef} style={style} className={cn(isDragging && 'opacity-60')}>
-    <div
-      ref={setNodeRef}
-      className={cn(
-        "flex-shrink-0 w-72 flex flex-col bg-muted/30 rounded-lg",
-        isOver && "ring-2 ring-primary ring-offset-2"
-      )}
-    >
-      {/* Column Header */}
-      <div 
+      <div
+        ref={setNodeRef}
         className={cn(
-          "flex items-center gap-2 p-3 border-b border-border",
-          !isEditing && "cursor-grab active:cursor-grabbing hover:bg-muted/50 transition-colors"
+          "flex-shrink-0 w-72 flex flex-col bg-muted/30 rounded-lg",
+          "max-h-[calc(100vh-12rem)] min-h-[600px]",
+          isOver && "ring-2 ring-primary ring-offset-2"
         )}
-        {...(!isEditing ? { ...attributes, ...listeners } : {})}
       >
-        {isEditing ? (
-          <div className="flex-1 space-y-2">
-            <Input
-              value={editName}
-              onChange={(e) => setEditName(e.target.value)}
-              className="h-7 text-sm"
-              autoFocus
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSave();
-                if (e.key === 'Escape') handleCancel();
-              }}
-            />
-            <div className="flex gap-1">
-              {PRESET_COLORS.map((c) => (
-                <button
-                  key={c}
-                  type="button"
-                  className={cn(
-                    "w-5 h-5 rounded-full transition-all",
-                    editColor === c && "ring-2 ring-offset-1 ring-primary"
-                  )}
-                  style={{ backgroundColor: c }}
-                  onClick={() => setEditColor(c)}
-                />
-              ))}
-            </div>
-            <div className="flex gap-1">
-              <Button size="sm" variant="ghost" className="h-6 px-2" onClick={handleSave}>
-                <Check className="h-3 w-3" />
-              </Button>
-              <Button size="sm" variant="ghost" className="h-6 px-2" onClick={handleCancel}>
-                <X className="h-3 w-3" />
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <>
-            <div
-              className="w-3 h-3 rounded-full flex-shrink-0"
-              style={{ backgroundColor: status.color }}
-            />
-            <h3 className="font-medium text-sm flex-1 truncate">{status.name}</h3>
-            <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
-              {tarefasCount}
-            </span>
-            <DropdownMenu open={showMenu} onOpenChange={setShowMenu}>
-              <DropdownMenuTrigger asChild>
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  className="h-6 w-6"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                  }}
-                  onPointerDown={(e) => {
-                    e.stopPropagation();
-                  }}
-                  onMouseDown={(e) => {
-                    e.stopPropagation();
-                  }}
-                >
-                  <MoreHorizontal className="h-4 w-4" />
-                </Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent 
-                align="end"
-                onClick={(e) => e.stopPropagation()}
-                onPointerDownOutside={(e) => {
-                  e.stopPropagation();
+        {/* Column Header */}
+        <div 
+          className={cn(
+            "flex items-center gap-2 p-3 border-b border-border flex-shrink-0",
+            !isEditing && "cursor-grab active:cursor-grabbing hover:bg-muted/50 transition-colors"
+          )}
+          {...(!isEditing ? { ...attributes, ...listeners } : {})}
+        >
+          {isEditing ? (
+            <div className="flex-1 space-y-2">
+              <Input
+                value={editName}
+                onChange={(e) => setEditName(e.target.value)}
+                className="h-7 text-sm"
+                autoFocus
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') handleSave();
+                  if (e.key === 'Escape') handleCancel();
                 }}
-              >
-                <DropdownMenuItem
-                  onClick={(e) => { 
+              />
+              <div className="flex gap-1">
+                {PRESET_COLORS.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    className={cn(
+                      "w-5 h-5 rounded-full transition-all",
+                      editColor === c && "ring-2 ring-offset-1 ring-primary"
+                    )}
+                    style={{ backgroundColor: c }}
+                    onClick={() => setEditColor(c)}
+                  />
+                ))}
+              </div>
+              <div className="flex gap-1">
+                <Button size="sm" variant="ghost" className="h-6 px-2" onClick={handleSave}>
+                  <Check className="h-3 w-3" />
+                </Button>
+                <Button size="sm" variant="ghost" className="h-6 px-2" onClick={handleCancel}>
+                  <X className="h-3 w-3" />
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <>
+              <div
+                className="w-3 h-3 rounded-full flex-shrink-0"
+                style={{ backgroundColor: status.color }}
+              />
+              <h3 className="font-medium text-sm flex-1 truncate">{status.name}</h3>
+              <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded-full">
+                {tarefasCount}
+              </span>
+              <DropdownMenu open={showMenu} onOpenChange={setShowMenu}>
+                <DropdownMenuTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    className="h-6 w-6"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                    }}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                    }}
+                    onMouseDown={(e) => {
+                      e.stopPropagation();
+                    }}
+                  >
+                    <MoreHorizontal className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent 
+                  align="end"
+                  onClick={(e) => e.stopPropagation()}
+                  onPointerDownOutside={(e) => {
                     e.stopPropagation();
-                    setIsEditing(true); 
-                    setShowMenu(false); 
                   }}
                 >
-                  <Pencil className="h-3 w-3 mr-2" />
-                  Editar
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    handleDelete();
-                  }}
-                  disabled={status.is_initial || status.is_final}
-                  className="text-destructive focus:text-destructive"
-                >
-                  <Trash2 className="h-3 w-3 mr-2" />
-                  Excluir
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </>
-        )}
-      </div>
+                  <DropdownMenuItem
+                    onClick={(e) => { 
+                      e.stopPropagation();
+                      setIsEditing(true); 
+                      setShowMenu(false); 
+                    }}
+                  >
+                    <Pencil className="h-3 w-3 mr-2" />
+                    Editar
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleDelete();
+                    }}
+                    disabled={status.is_initial || status.is_final}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <Trash2 className="h-3 w-3 mr-2" />
+                    Excluir
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </>
+          )}
+        </div>
 
-      {/* Column Content */}
-      <div className="flex-1 p-2 space-y-2 overflow-y-auto min-h-[200px]">
-        {children}
-      </div>
+        {/* Column Content - Droppable area */}
+        <div className="flex-1 p-2 space-y-2 overflow-y-auto min-h-0 relative">
+          {children}
+          {/* Empty space at the end to ensure drops work even when scrolled */}
+          <div className="h-16 flex-shrink-0" />
+        </div>
       </div>
     </div>
   );
