@@ -500,12 +500,14 @@ export function ApiKeysCard({ projectId }: ApiKeysCardProps) {
                       Gemini (Google)
                     </div>
                   </SelectItem>
+                  {/*
                   <SelectItem value="OPENAI">
                     <div className="flex items-center gap-2">
                       <Brain className="h-4 w-4" />
                       OpenAI (ChatGPT)
                     </div>
                   </SelectItem>
+                      */}
                 </SelectContent>
               </Select>
             </div>
